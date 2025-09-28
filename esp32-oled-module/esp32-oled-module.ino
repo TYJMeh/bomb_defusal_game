@@ -13,8 +13,8 @@ const char* password = "0172037375"; // Replace with your WiFi password
 const char* mqtt_broker = "192.168.1.201"; // Replace with Raspberry Pi's IP
 const int mqtt_port = 1883;
 String clientId = "ESP32_Display_" + String(random(0xffff), HEX); // Unique client ID
-const char* topic_from_rpi = "rpi/to/display";
-const char* topic_to_rpi = "display/to/rpi";
+const char* topic_from_rpi = "rpi/to/esp2";
+const char* topic_to_rpi = "esp2/to/rpi";
 
 // WiFi and MQTT clients
 WiFiClient espClient;
@@ -118,6 +118,12 @@ void loop() {
   }
   client.loop();
   
+  // Timer update logic - works regardless of waiting state
+  if (countdownActive && millis() - lastUpdate >= 1000) {
+    updateCountdown();
+    lastUpdate = millis();
+  }
+  
   if (waiting == 0) {
     // Module is waiting for all modules to connect
     // Only handle MQTT and serial commands, no game logic
@@ -125,12 +131,6 @@ void loop() {
   }
   else if (waiting == 1) {
     // All modules connected, normal operation
-    // Check if countdown is active and update every second
-    if (countdownActive && millis() - lastUpdate >= 1000) {
-      updateCountdown();
-      lastUpdate = millis();
-    }
-    
     // Check for serial input
     handleSerialInput();
   }
@@ -232,46 +232,74 @@ void reconnectMQTT() {
 }
 
 void processMQTTMessage(String message) {
-  // Try to parse as JSON first
+  // Add detailed JSON parsing debug
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, message);
   
   if (!error) {
+    Serial.println("🔍 JSON Parsed successfully:");
+    
     // JSON message format
     String type = doc["type"];
     String content = doc["message"];
+    String command = doc["command"];  // Also check for "command" field
     
-    if (type == "X" || type == "WRONG_WIRE" || type == "FAILURE") {
-      addXMark(type);
+    Serial.printf("  - type: '%s'\n", type.c_str());
+    Serial.printf("  - command: '%s'\n", command.c_str());
+    Serial.printf("  - message: '%s'\n", content.c_str());
+    Serial.printf("  - Current waiting status: %d\n", waiting);
+    
+    if (type == "X" || type == "WRONG_WIRE" || type == "FAILURE" || command == "X") {
+      Serial.printf("📨 Received X command via MQTT: %s\n", type.c_str());
+      addXMark(type.length() > 0 ? type : "MQTT_COMMAND");
     }
-    else if (type == "RESET_X" || type == "NEW_GAME") {
+    else if (type == "RESET_X" || type == "NEW_GAME" || command == "RESET_X") {
       resetXCounter();
     }
-    else if (type == "START_TIMER") {
-      int duration = doc["duration"] | 60;  // Default 60 seconds
+    else if (type == "START_TIMER" || command == "START_TIMER") {
+      int duration = doc["duration"] | 300;  // Default 300 seconds (5 minutes)
+      Serial.printf("🚀 Starting timer for %d seconds\n", duration);
       startCountdown(duration);
     }
-    else if (type == "STOP_TIMER") {
+    else if (type == "STOP_TIMER" || command == "STOP_TIMER") {
+      Serial.println("⏹️ Stopping timer via MQTT");
       stopCountdown();
     }
-    else if (type == "TEST") {
+    else if (type == "TEST" || command == "TEST") {
       testDisplays();
     }
-    else if (type == "ACTIVATE") {
-      // Activate module - all modules are connected
-      waiting = 1;
+    else if (type == "ACTIVATE" || command == "ACTIVATE") {
+      // FIXED: Only activate module, don't start countdown
+      waiting = 1;  // Set waiting to 1 to indicate module is activated
       Serial.println("🚀 Display module activated! All modules connected.");
       sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
+      
+      // Update display to show activated state
+      showActivatedMessage();
+    }
+    else if (type == "GAME_OVER" || command == "GAME_OVER") {
+      Serial.println("💥 Game Over received!");
+      stopCountdown();
+      showGameOver();
+    }
+    else if (type == "VICTORY" || command == "VICTORY") {
+      Serial.println("🎉 Victory received!");
+      stopCountdown();
+      showVictory();
     }
     else {
-      Serial.printf("Unknown JSON message type: %s\n", type.c_str());
+      Serial.printf("❓ Unknown JSON message - type: '%s', command: '%s'\n", type.c_str(), command.c_str());
     }
   }
   else {
+    Serial.printf("❌ JSON Parse failed: %s\n", error.c_str());
+    Serial.printf("Raw message: '%s'\n", message.c_str());
+    
     // Simple text message format
     message.toUpperCase();
     
     if (message == "X") {
+      Serial.println("📨 Received X command via simple MQTT message");
       addXMark("RPI_SIMPLE");
     }
     else if (message == "RESET") {
@@ -283,8 +311,14 @@ void processMQTTMessage(String message) {
         startCountdown(duration);
       }
     }
+    else if (message == "ACTIVATE") {
+      waiting = 1;
+      Serial.println("🚀 Display module activated via simple message!");
+      sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
+      showActivatedMessage();
+    }
     else {
-      Serial.printf("Unknown simple message: %s\n", message.c_str());
+      Serial.printf("❓ Unknown simple message: %s\n", message.c_str());
     }
   }
 }
@@ -329,8 +363,11 @@ void printMQTTStatus() {
 // ===== DISPLAY FUNCTIONS =====
 
 void addXMark(String source) {
+  Serial.printf("🔍 addXMark called from: %s, current count: %d/%d\n", source.c_str(), xCount, maxXCount);
+  
   if (xCount < maxXCount) {
     xCount++;
+    Serial.printf("✅ X count increased to: %d/%d\n", xCount, maxXCount);
     updateXDisplay();
     Serial.printf("❌ X added from %s! Total count: %d/%d\n", source.c_str(), xCount, maxXCount);
     
@@ -350,6 +387,7 @@ void addXMark(String source) {
 }
 
 void resetXCounter() {
+  Serial.printf("🔄 Resetting X counter from %d to 0\n", xCount);
   xCount = 0;
   updateXDisplay();
   Serial.println("🔄 X counter reset to 0");
@@ -438,6 +476,76 @@ void showWaitingMessage() {
   display1.setCursor(30, 52);
   display1.println("from RPI");
   display1.display();
+}
+
+void showActivatedMessage() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(20, 10);
+  display1.println("SYSTEM");
+  display1.setCursor(15, 30);
+  display1.println("ACTIVE");
+  display1.setTextSize(1);
+  display1.setCursor(15, 50);
+  display1.println("Ready for game");
+  display1.display();
+}
+
+void showGameOver() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(25, 15);
+  display1.println("GAME");
+  display1.setCursor(25, 35);
+  display1.println("OVER");
+  
+  // Add dramatic border
+  for (int i = 0; i < 3; i++) {
+    display1.drawRect(i * 2, i * 2, SCREEN_WIDTH - i * 4, SCREEN_HEIGHT_TIMER - i * 4, SSD1306_WHITE);
+  }
+  display1.display();
+  
+  // Blinking effect
+  for (int i = 0; i < 6; i++) {
+    delay(300);
+    display1.invertDisplay(i % 2);
+  }
+  
+  // Return to normal display
+  display1.invertDisplay(false);
+}
+
+void showVictory() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(15, 10);
+  display1.println("SUCCESS!");
+  display1.setTextSize(1);
+  display1.setCursor(20, 35);
+  display1.println("All puzzles");
+  display1.setCursor(25, 45);
+  display1.println("completed!");
+  
+  // Celebration border
+  display1.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT_TIMER, SSD1306_WHITE);
+  display1.drawRect(2, 2, SCREEN_WIDTH-4, SCREEN_HEIGHT_TIMER-4, SSD1306_WHITE);
+  
+  display1.display();
+  
+  // Victory animation
+  for (int i = 0; i < 8; i++) {
+    delay(250);
+    if (i % 2 == 0) {
+      display1.invertDisplay(true);
+    } else {
+      display1.invertDisplay(false);
+    }
+  }
+  
+  display1.invertDisplay(false);
 }
 
 void startCountdown(int seconds) {
@@ -572,6 +680,9 @@ void updateXDisplay() {
   display2.print(xCount);
   display2.print("/");
   display2.print(maxXCount);
+  
+  // Debug output
+  Serial.printf("X Display Update: %d/%d\n", xCount, maxXCount);
   
   // Add warning if approaching limit
   if (xCount >= maxXCount - 1 && xCount < maxXCount) {
