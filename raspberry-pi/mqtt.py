@@ -22,7 +22,7 @@ def create_default_config():
     """Create a default config file if it doesn't exist"""
     default_config = {
         "timer_settings": {
-            "game_duration": 300,
+            "game_duration": 360,
             "warning_time": 60,
             "countdown_start": 10,
             "auto_reset": True,
