@@ -13,8 +13,8 @@ const char* password = "0172037375"; // Replace with your WiFi password
 const char* mqtt_broker = "192.168.1.201"; // Replace with Raspberry Pi's IP
 const int mqtt_port = 1883;
 String clientId = "ESP32_Display_" + String(random(0xffff), HEX); // Unique client ID
-const char* topic_from_rpi = "rpi/to/display";
-const char* topic_to_rpi = "display/to/rpi";
+const char* topic_from_rpi = "rpi/to/esp2";
+const char* topic_to_rpi = "esp2/to/rpi";
 
 // WiFi and MQTT clients
 WiFiClient espClient;
@@ -118,6 +118,12 @@ void loop() {
   }
   client.loop();
   
+  // Timer update logic - works regardless of waiting state
+  if (countdownActive && millis() - lastUpdate >= 1000) {
+    updateCountdown();
+    lastUpdate = millis();
+  }
+  
   if (waiting == 0) {
     // Module is waiting for all modules to connect
     // Only handle MQTT and serial commands, no game logic
@@ -125,12 +131,6 @@ void loop() {
   }
   else if (waiting == 1) {
     // All modules connected, normal operation
-    // Check if countdown is active and update every second
-    if (countdownActive && millis() - lastUpdate >= 1000) {
-      updateCountdown();
-      lastUpdate = millis();
-    }
-    
     // Check for serial input
     handleSerialInput();
   }
@@ -242,6 +242,7 @@ void processMQTTMessage(String message) {
     String content = doc["message"];
     
     if (type == "X" || type == "WRONG_WIRE" || type == "FAILURE") {
+      Serial.printf("📨 Received X command via MQTT: %s\n", type.c_str());
       addXMark(type);
     }
     else if (type == "RESET_X" || type == "NEW_GAME") {
@@ -272,6 +273,7 @@ void processMQTTMessage(String message) {
     message.toUpperCase();
     
     if (message == "X") {
+      Serial.println("📨 Received X command via simple MQTT message");
       addXMark("RPI_SIMPLE");
     }
     else if (message == "RESET") {
@@ -329,8 +331,11 @@ void printMQTTStatus() {
 // ===== DISPLAY FUNCTIONS =====
 
 void addXMark(String source) {
+  Serial.printf("🔍 addXMark called from: %s, current count: %d/%d\n", source.c_str(), xCount, maxXCount);
+  
   if (xCount < maxXCount) {
     xCount++;
+    Serial.printf("✅ X count increased to: %d/%d\n", xCount, maxXCount);
     updateXDisplay();
     Serial.printf("❌ X added from %s! Total count: %d/%d\n", source.c_str(), xCount, maxXCount);
     
@@ -350,6 +355,7 @@ void addXMark(String source) {
 }
 
 void resetXCounter() {
+  Serial.printf("🔄 Resetting X counter from %d to 0\n", xCount);
   xCount = 0;
   updateXDisplay();
   Serial.println("🔄 X counter reset to 0");
@@ -572,6 +578,9 @@ void updateXDisplay() {
   display2.print(xCount);
   display2.print("/");
   display2.print(maxXCount);
+  
+  // Debug output
+  Serial.printf("X Display Update: %d/%d\n", xCount, maxXCount);
   
   // Add warning if approaching limit
   if (xCount >= maxXCount - 1 && xCount < maxXCount) {
