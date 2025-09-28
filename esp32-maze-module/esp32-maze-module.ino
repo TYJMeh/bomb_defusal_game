@@ -12,8 +12,8 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // WiFi and MQTT settings
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "advaspire_2.4G";
+const char* password = "0172037375";
 const char* mqtt_server = "192.168.1.201";
 const int mqtt_port = 1883;
 
@@ -164,7 +164,15 @@ void handleInput() {
         Serial.println("Hit wall! Returning to start.");
         
         // Send wall hit notification to RPi
-        sendMqttMessage("WALL_HIT", "Player hit wall and returned to start");
+        StaticJsonDocument<200> doc;
+        doc["type"] = "WALL_HIT";
+        doc["message"] = "Player hit wall and returned to start";
+        doc["device"] = "ESP32_Maze";
+        doc["timestamp"] = millis();
+        
+        String jsonString;
+        serializeJson(doc, jsonString);
+        client.publish(publish_topic, jsonString.c_str());
         
       } else {
         // Valid move
@@ -176,15 +184,17 @@ void handleInput() {
           gameWon = true;
           Serial.println("You Win!");
           
-          // Send win notification to RPi
-          StaticJsonDocument<200> doc;
-          doc["type"] = "MAZE_COMPLETED";
-          doc["message"] = "Player completed the maze!";
-          doc["time"] = millis();
-          
-          String jsonString;
-          serializeJson(doc, jsonString);
-          client.publish(publish_topic, jsonString.c_str());
+        // Send win notification to RPi
+        StaticJsonDocument<200> doc;
+        doc["type"] = "MAZE_COMPLETED";
+        doc["message"] = "Player completed the maze!";
+        doc["time"] = millis();
+        doc["device"] = "ESP32_Maze";
+        doc["timestamp"] = millis();
+        
+        String jsonString;
+        serializeJson(doc, jsonString);
+        client.publish(publish_topic, jsonString.c_str());
         }
       }
       
@@ -199,7 +209,15 @@ void handleInput() {
       gameWon = false;
       playerX = 1;
       playerY = 1;
-      sendMqttMessage("GAME_RESTART", "Maze game restarted");
+      StaticJsonDocument<200> doc;
+      doc["type"] = "GAME_RESTART";
+      doc["message"] = "Maze game restarted";
+      doc["device"] = "ESP32_Maze";
+      doc["timestamp"] = millis();
+      
+      String jsonString;
+      serializeJson(doc, jsonString);
+      client.publish(publish_topic, jsonString.c_str());
       delay(300); // Debounce
     }
   }
@@ -302,6 +320,9 @@ void reconnectMQTT() {
     if (client.connect("ESP32_Maze_Game")) {
       Serial.println("connected");
       client.subscribe(subscribe_topic);
+      
+      // Send connection status
+      sendConnectionStatus();
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -309,6 +330,19 @@ void reconnectMQTT() {
       delay(5000);
     }
   }
+}
+
+void sendConnectionStatus() {
+  StaticJsonDocument<200> doc;
+  doc["type"] = "MAZE_MODULE_CONNECTED";
+  doc["message"] = "Maze navigation module ready";
+  doc["device"] = "ESP32_Maze";
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  client.publish(publish_topic, jsonString.c_str());
+  Serial.println("Sent connection status to Raspberry Pi");
 }
 
 // MQTT message callback

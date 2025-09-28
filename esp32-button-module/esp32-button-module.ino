@@ -8,8 +8,8 @@ const int buttonPin = 23;
 const int ledPin = 32;
 
 // WiFi and MQTT settings
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "advaspire_2.4G";
+const char* password = "0172037375";
 const char* mqtt_server = "192.168.1.201";
 const char* subscribe_topic = "rpi/to/esp4";
 const char* publish_topic = "esp4/to/rpi";
@@ -118,6 +118,9 @@ void reconnect() {
     if (client.connect("ESP32ButtonGame")) {
       Serial.println("connected");
       client.subscribe(subscribe_topic);
+      
+      // Send connection status
+      sendConnectionStatus();
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -125,6 +128,21 @@ void reconnect() {
       delay(5000);
     }
   }
+}
+
+void sendConnectionStatus() {
+  DynamicJsonDocument doc(512);
+  doc["type"] = "BUTTON_MODULE_CONNECTED";
+  doc["message"] = "Button timing module ready";
+  doc["device"] = "ESP32_Button";
+  doc["target_time"] = targetTime;
+  doc["tolerance"] = 500;
+  doc["timestamp"] = millis();
+  
+  String output;
+  serializeJson(doc, output);
+  client.publish(publish_topic, output.c_str());
+  Serial.println("Sent connection status to Raspberry Pi");
 }
 
 void sendGameResult(bool won, unsigned long duration) {
@@ -142,6 +160,8 @@ void sendGameResult(bool won, unsigned long duration) {
   doc["target_time"] = targetTime;
   doc["tolerance"] = 500;
   doc["difference"] = abs((int)duration - targetTime);
+  doc["timestamp"] = millis();
+  doc["device"] = "ESP32_Button";
   
   String output;
   serializeJson(doc, output);

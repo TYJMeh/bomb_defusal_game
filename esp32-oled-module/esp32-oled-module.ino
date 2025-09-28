@@ -81,6 +81,7 @@ void setup() {
     Serial.println("Check wiring: SDA2=25, SCL2=26");
     for(;;);
   }
+  display2.setRotation(2);  // Rotate 180 degrees
   Serial.println("✓ Display 2 (X Counter 128x32) initialized successfully");
   
   // Clear both displays
@@ -546,9 +547,9 @@ void updateXDisplay() {
     display2.print("X");
   }
   
-  // Show count at bottom (adjusted for 32-pixel height)
+  // Show count at top (flipped for 32-pixel height)
   display2.setTextSize(1);
-  display2.setCursor(50, 24);  // Position near bottom of 32-pixel display
+  display2.setCursor(50, 2);  // Position at top of 32-pixel display
   display2.print(xCount);
   display2.print("/");
   display2.print(maxXCount);
