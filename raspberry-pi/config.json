@@ -1,0 +1,14 @@
+{
+    "timer_settings": {
+        "game_duration": 300,
+        "warning_time": 60,
+        "countdown_start": 10,
+        "auto_reset": true,
+        "difficulty_level": "medium"
+    },
+    "game_settings": {
+        "simultaneous_start": true,
+        "require_all_connected": true,
+        "emergency_stop_on_disconnect": true
+    }
+}
