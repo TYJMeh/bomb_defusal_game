@@ -232,43 +232,69 @@ void reconnectMQTT() {
 }
 
 void processMQTTMessage(String message) {
-  // Try to parse as JSON first
+  // Add detailed JSON parsing debug
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, message);
   
   if (!error) {
+    Serial.println("🔍 JSON Parsed successfully:");
+    
     // JSON message format
     String type = doc["type"];
     String content = doc["message"];
+    String command = doc["command"];  // Also check for "command" field
     
-    if (type == "X" || type == "WRONG_WIRE" || type == "FAILURE") {
+    Serial.printf("  - type: '%s'\n", type.c_str());
+    Serial.printf("  - command: '%s'\n", command.c_str());
+    Serial.printf("  - message: '%s'\n", content.c_str());
+    Serial.printf("  - Current waiting status: %d\n", waiting);
+    
+    if (type == "X" || type == "WRONG_WIRE" || type == "FAILURE" || command == "X") {
       Serial.printf("📨 Received X command via MQTT: %s\n", type.c_str());
-      addXMark(type);
+      addXMark(type.length() > 0 ? type : "MQTT_COMMAND");
     }
-    else if (type == "RESET_X" || type == "NEW_GAME") {
+    else if (type == "RESET_X" || type == "NEW_GAME" || command == "RESET_X") {
       resetXCounter();
     }
-    else if (type == "START_TIMER") {
-      int duration = doc["duration"] | 60;  // Default 60 seconds
+    else if (type == "START_TIMER" || command == "START_TIMER") {
+      int duration = doc["duration"] | 300;  // Default 300 seconds (5 minutes)
+      Serial.printf("🚀 Starting timer for %d seconds\n", duration);
       startCountdown(duration);
     }
-    else if (type == "STOP_TIMER") {
+    else if (type == "STOP_TIMER" || command == "STOP_TIMER") {
+      Serial.println("⏹️ Stopping timer via MQTT");
       stopCountdown();
     }
-    else if (type == "TEST") {
+    else if (type == "TEST" || command == "TEST") {
       testDisplays();
     }
-    else if (type == "ACTIVATE") {
-      // Activate module - all modules are connected
-      waiting = 1;
+    else if (type == "ACTIVATE" || command == "ACTIVATE") {
+      // FIXED: Only activate module, don't start countdown
+      waiting = 1;  // Set waiting to 1 to indicate module is activated
       Serial.println("🚀 Display module activated! All modules connected.");
       sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
+      
+      // Update display to show activated state
+      showActivatedMessage();
+    }
+    else if (type == "GAME_OVER" || command == "GAME_OVER") {
+      Serial.println("💥 Game Over received!");
+      stopCountdown();
+      showGameOver();
+    }
+    else if (type == "VICTORY" || command == "VICTORY") {
+      Serial.println("🎉 Victory received!");
+      stopCountdown();
+      showVictory();
     }
     else {
-      Serial.printf("Unknown JSON message type: %s\n", type.c_str());
+      Serial.printf("❓ Unknown JSON message - type: '%s', command: '%s'\n", type.c_str(), command.c_str());
     }
   }
   else {
+    Serial.printf("❌ JSON Parse failed: %s\n", error.c_str());
+    Serial.printf("Raw message: '%s'\n", message.c_str());
+    
     // Simple text message format
     message.toUpperCase();
     
@@ -285,8 +311,14 @@ void processMQTTMessage(String message) {
         startCountdown(duration);
       }
     }
+    else if (message == "ACTIVATE") {
+      waiting = 1;
+      Serial.println("🚀 Display module activated via simple message!");
+      sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
+      showActivatedMessage();
+    }
     else {
-      Serial.printf("Unknown simple message: %s\n", message.c_str());
+      Serial.printf("❓ Unknown simple message: %s\n", message.c_str());
     }
   }
 }
@@ -444,6 +476,76 @@ void showWaitingMessage() {
   display1.setCursor(30, 52);
   display1.println("from RPI");
   display1.display();
+}
+
+void showActivatedMessage() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(20, 10);
+  display1.println("SYSTEM");
+  display1.setCursor(15, 30);
+  display1.println("ACTIVE");
+  display1.setTextSize(1);
+  display1.setCursor(15, 50);
+  display1.println("Ready for game");
+  display1.display();
+}
+
+void showGameOver() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(25, 15);
+  display1.println("GAME");
+  display1.setCursor(25, 35);
+  display1.println("OVER");
+  
+  // Add dramatic border
+  for (int i = 0; i < 3; i++) {
+    display1.drawRect(i * 2, i * 2, SCREEN_WIDTH - i * 4, SCREEN_HEIGHT_TIMER - i * 4, SSD1306_WHITE);
+  }
+  display1.display();
+  
+  // Blinking effect
+  for (int i = 0; i < 6; i++) {
+    delay(300);
+    display1.invertDisplay(i % 2);
+  }
+  
+  // Return to normal display
+  display1.invertDisplay(false);
+}
+
+void showVictory() {
+  display1.clearDisplay();
+  display1.setTextSize(2);
+  display1.setTextColor(SSD1306_WHITE);
+  display1.setCursor(15, 10);
+  display1.println("SUCCESS!");
+  display1.setTextSize(1);
+  display1.setCursor(20, 35);
+  display1.println("All puzzles");
+  display1.setCursor(25, 45);
+  display1.println("completed!");
+  
+  // Celebration border
+  display1.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT_TIMER, SSD1306_WHITE);
+  display1.drawRect(2, 2, SCREEN_WIDTH-4, SCREEN_HEIGHT_TIMER-4, SSD1306_WHITE);
+  
+  display1.display();
+  
+  // Victory animation
+  for (int i = 0; i < 8; i++) {
+    delay(250);
+    if (i % 2 == 0) {
+      display1.invertDisplay(true);
+    } else {
+      display1.invertDisplay(false);
+    }
+  }
+  
+  display1.invertDisplay(false);
 }
 
 void startCountdown(int seconds) {

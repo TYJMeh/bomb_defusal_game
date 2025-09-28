@@ -1,6 +1,7 @@
 import paho.mqtt.client as mqtt
 import json
 import os
+import time
 
 # Track completion status of all games
 wire_game_completed = False
@@ -84,19 +85,47 @@ def check_all_modules_connected(client):
         print("🎉 All modules connected! Sending activation signal...")
         
         # Send activation signal to all modules
-        activation_command = {"command": "ACTIVATE"}
+        # FIXED: Use proper JSON format with "type" field
+        activation_command = {
+            "type": "ACTIVATE",
+            "message": "All modules connected - system activated!",
+            "timestamp": int(time.time() * 1000)  # Add timestamp
+        }
         
-        # Send to all modules
-        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4", "rpi/to/display"]
+        # Send to all modules with their specific topics
+        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+        
         for topic in topics:
             client.publish(topic, json.dumps(activation_command))
+            print(f"  ✅ Sent activation to {topic}")
         
-        print("✅ Activation signals sent to all modules!")
+        print("✅ All activation signals sent!")
         return True
     else:
         missing_modules = [module for module, connected in modules_connected.items() if not connected]
         print(f"⏳ Waiting for modules: {', '.join(missing_modules)}")
         return False
+
+def start_game_timer(client, duration=300):
+    """Start the game timer on the display module"""
+    timer_command = {
+        "type": "START_TIMER",
+        "duration": duration,
+        "message": f"Game timer started for {duration} seconds"
+    }
+    
+    client.publish("rpi/to/esp2", json.dumps(timer_command))
+    print(f"🚀 Game timer started: {duration} seconds")
+
+def send_x_to_display(client, reason="GAME_FAILURE"):
+    """Send X mark to display"""
+    x_command = {
+        "type": "X",
+        "message": f"X mark added due to: {reason}"
+    }
+    
+    client.publish("rpi/to/esp2", json.dumps(x_command))
+    print(f"❌ X mark sent to display: {reason}")
 
 def on_connect(client, userdata, flags, rc):
     print(f"Connected with result code {rc}")
@@ -113,14 +142,14 @@ def on_message(client, userdata, msg):
    
     topic = msg.topic
     message_payload = msg.payload.decode()
-    print(f"Received message on topic {topic}: {message_payload}")
+    print(f"📨 Received on {topic}: {message_payload}")
    
     # Handle configuration requests
     if topic == "config/request":
         try:
             config = load_config()
             client.publish("config/response", json.dumps(config))
-            print("Sent config response:", config)
+            print("Sent config response")
         except Exception as e:
             print(f"Error handling config request: {e}")
         return
@@ -136,7 +165,7 @@ def on_message(client, userdata, msg):
                 # Apply new timer settings to timer ESP32
                 if "timer_settings" in new_config:
                     timer_update = {
-                        "command": "UPDATE_SETTINGS",
+                        "type": "UPDATE_SETTINGS",
                         "settings": new_config["timer_settings"]
                     }
                     client.publish("rpi/to/esp2", json.dumps(timer_update))
@@ -155,122 +184,133 @@ def on_message(client, userdata, msg):
         # Try parsing as JSON
         data = json.loads(message_payload)
        
-        # Handle messages from first ESP32 (wire game)
-        if isinstance(data, dict) and data.get("type") == "WIRE_MODULE_CONNECTED":
-            print("🔌 Wire module connected!")
-            print(f"Device: {data.get('device', 'Unknown')}")
-            modules_connected["wire"] = True
-            check_all_modules_connected(client)
-            
-        elif isinstance(data, dict) and data.get("type") == "WRONG_CUT_ALERT":
-            print(f" WRONG CUT ALERT! ")
-            print(f"Player cut {data['wrong_wire_cut']} wire")
-            print(f"Expected {data['expected_wire']} wire")
-            print(f"Step: {data['current_step']}/{data['total_steps']}")
-            # Send "X" signal to second ESP32
-            client.publish("rpi/to/esp2", json.dumps({"command": "X"}))
-            print("Sent 'X' signal to second ESP32 on topic 'rpi/to/esp2'")
+        # Handle messages from ESP32 Display (esp2/to/rpi)
+        if topic == "esp2/to/rpi":
+            if isinstance(data, dict):
+                msg_type = data.get("type", "")
+                
+                if msg_type == "DISPLAY_CONNECTED":
+                    print("📺 Display module connected!")
+                    print(f"Device: {data.get('device', 'Unknown')}")
+                    modules_connected["display"] = True
+                    check_all_modules_connected(client)
+                    
+                elif msg_type == "DISPLAY_ACTIVATED":
+                    print("✅ Display module activated and ready")
+                    
+                elif msg_type == "TIMER_FINISHED":
+                    print("⏰ TIMER FINISHED - GAME OVER!")
+                    handle_timer_finished(client)
+                    
+                elif msg_type == "X_ADDED":
+                    print(f"❌ X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+                   
+                elif msg_type == "MAX_X_REACHED":
+                    print("🚨 DISPLAY: Maximum X count reached!")
+                    print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+                   
+                elif msg_type == "TIMER_STARTED":
+                    print(f"⏰ Display timer started: {data.get('message', 'Unknown duration')}")
+                   
+                elif msg_type == "TIMER_STOPPED":
+                    print(f"⏹️ Display timer stopped: {data.get('message', 'Unknown reason')}")
+        
+        # Handle messages from wire module (esp/to/rpi)
+        elif topic == "esp/to/rpi":
+            if isinstance(data, dict):
+                msg_type = data.get("type", "")
+                
+                if msg_type == "WIRE_MODULE_CONNECTED":
+                    print("🔌 Wire module connected!")
+                    print(f"Device: {data.get('device', 'Unknown')}")
+                    modules_connected["wire"] = True
+                    check_all_modules_connected(client)
+                    
+                elif msg_type == "WRONG_CUT_ALERT":
+                    print(f"❌ WRONG CUT ALERT!")
+                    print(f"Player cut {data['wrong_wire_cut']} wire")
+                    print(f"Expected {data['expected_wire']} wire")
+                    print(f"Step: {data['current_step']}/{data['total_steps']}")
+                    # Send "X" signal to display ESP32
+                    send_x_to_display(client, "WRONG_WIRE_CUT")
+                   
+                elif msg_type == "PUZZLE_COMPLETED":
+                    print("🎉 Wire game completed by first ESP32!")
+                    wire_game_completed = True
+                    check_all_games_completed(client)
+        
+        # Handle messages from maze module (esp3/to/rpi)
+        elif topic == "esp3/to/rpi":
+            if isinstance(data, dict):
+                msg_type = data.get("type", "")
+                
+                if msg_type == "MAZE_MODULE_CONNECTED":
+                    print("🎮 Maze module connected!")
+                    print(f"Device: {data.get('device', 'Unknown')}")
+                    modules_connected["maze"] = True
+                    check_all_modules_connected(client)
+                    
+                elif msg_type == "MAZE_COMPLETED":
+                    print("🎉 MAZE COMPLETED!")
+                    print(f"Player finished the maze!")
+                    maze_game_completed = True
+                    check_all_games_completed(client)
+                   
+                elif msg_type == "WALL_HIT":
+                    print(f"❌ WALL HIT IN MAZE!")
+                    print(f"Player hit a wall and returned to start")
+                    # Send "X" signal to display ESP32
+                    send_x_to_display(client, "MAZE_WALL_HIT")
+                   
+                elif msg_type == "GAME_RESTART":
+                    print("🔄 Maze game restarted by player")
+        
+        # Handle messages from button module (esp4/to/rpi)
+        elif topic == "esp4/to/rpi":
+            if isinstance(data, dict):
+                msg_type = data.get("type", "")
+                
+                if msg_type == "BUTTON_MODULE_CONNECTED":
+                    print("🔘 Button module connected!")
+                    print(f"Device: {data.get('device', 'Unknown')}")
+                    print(f"Target time: {data.get('target_time', 2000)}ms")
+                    modules_connected["button"] = True
+                    check_all_modules_connected(client)
+                    
+                elif msg_type == "BUTTON_GAME_WON":
+                    print("🎉 BUTTON GAME WON!")
+                    print(f"Player won the button timing game!")
+                    print(f"Press duration: {data['press_duration']}ms")
+                    print(f"Target time: {data['target_time']}ms")
+                    print(f"Difference: {data['difference']}ms")
+                    button_game_completed = True
+                    check_all_games_completed(client)
+                   
+                elif msg_type == "BUTTON_GAME_LOST":
+                    print("❌ BUTTON GAME LOST!")
+                    print(f"Player lost the button timing game!")
+                    print(f"Press duration: {data['press_duration']}ms")
+                    print(f"Target time: {data['target_time']}ms")
+                    print(f"Difference: {data['difference']}ms")
+                    # Send "X" signal to display ESP32
+                    send_x_to_display(client, "BUTTON_GAME_LOST")
            
-        elif isinstance(data, dict) and data.get("type") == "PUZZLE_COMPLETED":
-            print(" Wire game completed by first ESP32! ")
-            wire_game_completed = True
-            # Send STOP_TIMER command to second ESP32
-            client.publish("rpi/to/esp2", json.dumps({"command": "STOP_TIMER"}))
-            print("Sent 'STOP_TIMER' signal to second ESP32 on 'rpi/to/esp2'")
-            check_all_games_completed(client)
-           
-        # Handle messages from third ESP32 (maze game)
-        elif isinstance(data, dict) and data.get("type") == "MAZE_MODULE_CONNECTED":
-            print("🎮 Maze module connected!")
-            print(f"Device: {data.get('device', 'Unknown')}")
-            modules_connected["maze"] = True
-            check_all_modules_connected(client)
-            
-        elif isinstance(data, dict) and data.get("type") == "MAZE_COMPLETED":
-            print(" MAZE COMPLETED! ")
-            print(f"Player finished the maze!")
-            maze_game_completed = True
-            check_all_games_completed(client)
-           
-        elif isinstance(data, dict) and data.get("type") == "WALL_HIT":
-            print(f" WALL HIT IN MAZE! ")
-            print(f"Player hit a wall and returned to start")
-            # Send "X" signal to another ESP32 when wall is hit
-            client.publish("rpi/to/esp2", json.dumps({"command": "X"}))  # Send to timer ESP32
-            print("Sent 'X' signal to second ESP32 due to wall hit")
-           
-        elif isinstance(data, dict) and data.get("type") == "GAME_RESTART":
-            print(" Maze game restarted by player ")
-           
-        # Handle messages from fourth ESP32 (button game)
-        elif isinstance(data, dict) and data.get("type") == "BUTTON_MODULE_CONNECTED":
-            print("🔘 Button module connected!")
-            print(f"Device: {data.get('device', 'Unknown')}")
-            print(f"Target time: {data.get('target_time', 2000)}ms")
-            modules_connected["button"] = True
-            check_all_modules_connected(client)
-            
-        elif isinstance(data, dict) and data.get("type") == "BUTTON_GAME_WON":
-            print(" BUTTON GAME WON! ")
-            print(f"Player won the button timing game!")
-            print(f"Press duration: {data['press_duration']}ms")
-            print(f"Target time: {data['target_time']}ms")
-            print(f"Difference: {data['difference']}ms")
-            button_game_completed = True
-            check_all_games_completed(client)
-           
-        elif isinstance(data, dict) and data.get("type") == "BUTTON_GAME_LOST":
-            print(" BUTTON GAME LOST! ")
-            print(f"Player lost the button timing game!")
-            print(f"Press duration: {data['press_duration']}ms")
-            print(f"Target time: {data['target_time']}ms")
-            print(f"Difference: {data['difference']}ms")
-           
-            # Send "X" signal to other ESP32s when button game is lost
-            client.publish("rpi/to/esp2", json.dumps({"command": "X"}))  # Send to timer ESP32
-            print("Sent 'X' signal to timer ESP32 due to button game loss")
-           
-        # Handle messages from ESP32 Display module
-        elif isinstance(data, dict) and data.get("type") == "DISPLAY_CONNECTED":
-            print("📺 Display module connected!")
-            print(f"Device: {data.get('device', 'Unknown')}")
-            print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-            modules_connected["display"] = True
-            check_all_modules_connected(client)
-           
-        elif isinstance(data, dict) and data.get("type") == "X_ADDED":
-            print(f"❌ X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-           
-        elif isinstance(data, dict) and data.get("type") == "MAX_X_REACHED":
-            print("🚨 DISPLAY: Maximum X count reached!")
-            print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-           
-        elif isinstance(data, dict) and data.get("type") == "X_RESET":
-            print("🔄 Display X counter reset")
-           
-        elif isinstance(data, dict) and data.get("type") == "TIMER_STARTED":
-            print(f"⏰ Display timer started: {data.get('message', 'Unknown duration')}")
-           
-        elif isinstance(data, dict) and data.get("type") == "TIMER_STOPPED":
-            print(f"⏹️ Display timer stopped: {data.get('message', 'Unknown reason')}")
-           
-        elif isinstance(data, dict) and data.get("type") == "TIMER_FINISHED":
-            print("⏰ Display timer finished!")
-            # Timer finished - this could trigger game over logic
-            handle_timer_finished(client)
-           
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON decode error: {e}")
+        print(f"Raw message: '{message_payload}'")
+        
         # Handle non-JSON messages (e.g., "1" from second ESP32)
         message = message_payload.strip()
        
         if message == "1":
-            print("Received '1' signal from second ESP32")
-            # Send "X" signal to first ESP32 to deactivate wire game
-            client.publish("rpi/to/esp", json.dumps({"command": "X"}))
-            print("Sent 'X' signal to first ESP32 on topic 'rpi/to/esp'")
-           
+            print("Received '1' signal from ESP32")
+            # Handle accordingly based on topic
+            if topic == "esp2/to/rpi":
+                print("Signal from display module")
         else:
-            print(f"Ignored non-JSON message: {message}")
+            print(f"Unknown non-JSON message: {message}")
+    except Exception as e:
+        print(f"❌ Error processing message: {e}")
 
 def handle_timer_finished(client):
     """Handle when the display timer finishes - trigger game over"""
@@ -284,7 +324,7 @@ def handle_timer_finished(client):
     }
     
     # Send to all ESP32s including display
-    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4", "rpi/to/display"]
+    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
     for topic in topics:
         client.publish(topic, json.dumps(game_over_message))
     
@@ -301,11 +341,11 @@ def check_all_games_completed(client):
         victory_message = {
             "type": "VICTORY",
             "message": "All puzzles completed!",
-            "timestamp": str(int(time.time()))
+            "timestamp": int(time.time() * 1000)
         }
        
         # Send to all ESP32s including display
-        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4", "rpi/to/display"]
+        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
         for topic in topics:
             client.publish(topic, json.dumps(victory_message))
            
@@ -330,19 +370,11 @@ def start_all_games(client):
         "countdown_start": 10
     })
    
-    # Send start commands to all ESP32s including display
-    commands = {
-        "rpi/to/esp": {"command": "START_GAME", "reset": True},
-        "rpi/to/esp2": {
-            "command": "START_TIMER",
-            "settings": timer_settings
-        },
-        "rpi/to/esp3": {"command": "START_GAME", "reset_position": True},
-        "rpi/to/esp4": {"command": "START_GAME", "new_round": True},
-        "rpi/to/display": {
-            "type": "START_TIMER",
-            "duration": timer_settings.get("game_duration", 300)
-        }
+    # Send start commands to all ESP32s
+    start_commands = {
+        "rpi/to/esp": {"type": "START_GAME", "reset": True},
+        "rpi/to/esp3": {"type": "START_GAME", "reset_position": True},
+        "rpi/to/esp4": {"type": "START_GAME", "new_round": True}
     }
    
     # Send countdown signal first
@@ -351,34 +383,35 @@ def start_all_games(client):
         "countdown": 3
     }
    
-    for topic in commands.keys():
+    for topic in start_commands.keys():
         client.publish(topic, json.dumps(sync_start))
+    
+    # Also send to display
+    client.publish("rpi/to/esp2", json.dumps(sync_start))
    
     print("Countdown started...")
-    import time
     time.sleep(3)
    
-    # Send actual start commands
-    for topic, command in commands.items():
+    # Send actual start commands to game modules
+    for topic, command in start_commands.items():
         client.publish(topic, json.dumps(command))
         time.sleep(0.1)
+    
+    # Start the timer on display module
+    start_game_timer(client, timer_settings.get("game_duration", 300))
        
     print("🎮 All games started!")
 
 def stop_all_games(client):
     """Stop all games"""
-    print("Stopping all games...")
+    print("⏹️ Stopping all games...")
    
-    stop_command = {"command": "STOP_GAME", "reason": "manual_stop"}
-    display_stop_command = {"type": "STOP_TIMER", "reason": "manual_stop"}
+    stop_command = {"type": "STOP_GAME", "reason": "manual_stop"}
     
-    # Stop all game modules
+    # Stop all modules
     topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
     for topic in topics:
         client.publish(topic, json.dumps(stop_command))
-    
-    # Stop display module
-    client.publish("rpi/to/display", json.dumps(display_stop_command))
        
     print("All games stopped!")
 
@@ -386,7 +419,7 @@ def reset_all_games(client):
     """Reset all games to initial state"""
     global wire_game_completed, maze_game_completed, button_game_completed
    
-    print("Resetting all games...")
+    print("🔄 Resetting all games...")
    
     # Reset completion tracking
     wire_game_completed = False
@@ -395,82 +428,16 @@ def reset_all_games(client):
    
     # Send reset commands
     reset_commands = {
-        "rpi/to/esp": {"command": "RESET_GAME"},
-        "rpi/to/esp2": {"command": "RESET_TIMER"},
-        "rpi/to/esp3": {"command": "RESET_GAME"},
-        "rpi/to/esp4": {"command": "RESET_GAME"},
-        "rpi/to/display": {"type": "RESET_X"}
+        "rpi/to/esp": {"type": "RESET_GAME"},
+        "rpi/to/esp2": {"type": "RESET_X"},
+        "rpi/to/esp3": {"type": "RESET_GAME"},
+        "rpi/to/esp4": {"type": "RESET_GAME"}
     }
    
     for topic, command in reset_commands.items():
         client.publish(topic, json.dumps(command))
        
     print("All games reset!")
-
-# Optional: Function to send commands to maze game
-def send_maze_command(client, command):
-    """Send commands to the maze game ESP32"""
-    client.publish("rpi/to/esp3", json.dumps({"command": command}))
-    print(f"Sent '{command}' to maze game")
-
-# Optional: Function to send commands to button game
-def send_button_game_command(client, command):
-    """Send commands to the button game ESP32"""
-    client.publish("rpi/to/esp4", json.dumps({"command": command}))
-    print(f"Sent '{command}' to button game")
-
-# Display control functions
-def send_display_command(client, command_type, **kwargs):
-    """Send commands to the display ESP32"""
-    message = {"type": command_type}
-    message.update(kwargs)
-    client.publish("rpi/to/display", json.dumps(message))
-    print(f"Sent '{command_type}' to display module")
-
-def add_x_to_display(client):
-    """Add an X mark to the display"""
-    send_display_command(client, "X")
-
-def reset_display_x(client):
-    """Reset the X counter on the display"""
-    send_display_command(client, "RESET_X")
-
-def start_display_timer(client, duration=300):
-    """Start the display timer"""
-    send_display_command(client, "START_TIMER", duration=duration)
-
-def stop_display_timer(client):
-    """Stop the display timer"""
-    send_display_command(client, "STOP_TIMER")
-
-def test_display(client):
-    """Test the display module"""
-    send_display_command(client, "TEST")
-
-def update_timer_settings(client, **settings):
-    """Update timer settings in config and send to timer ESP32"""
-    try:
-        config = load_config()
-       
-        # Update timer settings
-        if "timer_settings" not in config:
-            config["timer_settings"] = {}
-           
-        config["timer_settings"].update(settings)
-       
-        if save_config(config):
-            # Send updated settings to timer ESP32
-            timer_update = {
-                "command": "UPDATE_SETTINGS",
-                "settings": config["timer_settings"]
-            }
-            client.publish("rpi/to/esp2", json.dumps(timer_update))
-            print(f"Timer settings updated: {settings}")
-            return True
-        return False
-    except Exception as e:
-        print(f"Error updating timer settings: {e}")
-        return False
 
 def main():
     # Initialize MQTT client
@@ -483,19 +450,11 @@ def main():
     print("Initial config loaded:", json.dumps(config, indent=2))
    
     print("\n🎮 Available commands:")
-    print("- start_all_games(client)")
-    print("- stop_all_games(client)")
-    print("- reset_all_games(client)")
-    print("- update_timer_settings(client, game_duration=300, warning_time=60)")
-    print("- send_maze_command(client, 'COMMAND')")
-    print("- send_button_game_command(client, 'COMMAND')")
-    print("\n📺 Display commands:")
-    print("- add_x_to_display(client)")
-    print("- reset_display_x(client)")
-    print("- start_display_timer(client, duration=300)")
-    print("- stop_display_timer(client)")
-    print("- test_display(client)")
-    print("- send_display_command(client, 'COMMAND_TYPE', **kwargs)")
+    print("- start_all_games()")
+    print("- stop_all_games()")
+    print("- reset_all_games()")
+    print("- start_game_timer(duration=300)")
+    print("- send_x_to_display(reason='TEST')")
    
     try:
         # Connect and start
@@ -507,12 +466,8 @@ def main():
         builtins.start_all_games = lambda: start_all_games(client)
         builtins.stop_all_games = lambda: stop_all_games(client)
         builtins.reset_all_games = lambda: reset_all_games(client)
-        builtins.update_timer = lambda **kwargs: update_timer_settings(client, **kwargs)
-        builtins.add_x = lambda: add_x_to_display(client)
-        builtins.reset_x = lambda: reset_display_x(client)
-        builtins.start_timer = lambda duration=300: start_display_timer(client, duration)
-        builtins.stop_timer = lambda: stop_display_timer(client)
-        builtins.test_display = lambda: test_display(client)
+        builtins.start_timer = lambda duration=300: start_game_timer(client, duration)
+        builtins.add_x = lambda reason="MANUAL": send_x_to_display(client, reason)
        
         client.loop_forever()
        
