@@ -67,6 +67,7 @@ bool gameWon = false;
 bool gameActive = true;  // Can be controlled via MQTT
 unsigned long lastMoveTime = 0;
 const unsigned long moveDelay = 200; // 200ms delay between moves
+int waiting = 0;    // Waiting for all modules to connect
 
 void setup() {
   Serial.begin(115200);
@@ -101,14 +102,22 @@ void loop() {
   }
   client.loop();
   
-  if (!gameWon && gameActive) {
-    handleInput();
-    drawGame();
-  } else if (gameWon) {
-    displayWinMessage();
-  } else {
-    // Game is inactive - show waiting message
+  if (waiting == 0) {
+    // Module is waiting for all modules to connect
+    // Only handle MQTT, show waiting message
     displayWaitingMessage();
+  }
+  else if (waiting == 1) {
+    // All modules connected, normal operation
+    if (!gameWon && gameActive) {
+      handleInput();
+      drawGame();
+    } else if (gameWon) {
+      displayWinMessage();
+    } else {
+      // Game is inactive - show waiting message
+      displayWaitingMessage();
+    }
   }
 
   int xValue = analogRead(JOY_X_PIN);
@@ -381,6 +390,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     } else if (command == "X") {
       gameActive = false;
       Serial.println("Game deactivated via X command");
+    } else if (command == "ACTIVATE") {
+      // Activate module - all modules are connected
+      waiting = 1;
+      Serial.println("🚀 Maze module activated! All modules connected.");
+      sendConnectionStatus();
     }
   }
 }

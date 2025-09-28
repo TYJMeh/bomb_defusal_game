@@ -90,7 +90,7 @@ int total_reconnections = 0;
 int games_completed = 0;
 int wrong_cuts = 0;
 unsigned long start_time = 0;
-
+int waiting = 0;
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Wire Cutting Puzzle Game - MQTT Enabled");
@@ -106,15 +106,16 @@ void setup() {
   
   // Initialize wire pins as INPUT_PULLUP
   // Wires should be connected between pin and GND
-  // When wire is intact: HIGH (pulled up)
-  // When wire is cut: LOW (floating, pulled down by internal resistor logic)
+  // When wire is intact: LOW (connected to GND)
+  // When wire is cut: HIGH (disconnected, pulled up by internal resistor)
+  // Detection: LOW to HIGH transition = WIRE CUT
   for (int i = 0; i < NUM_WIRES; i++) {
     pinMode(WIRE_PINS[i], INPUT_PULLUP);
     
     // Initialize wire status
     wires[i].current_state = digitalRead(WIRE_PINS[i]);
     wires[i].previous_state = wires[i].current_state;
-    wires[i].is_cut = !wires[i].current_state;  // If LOW at start, consider it cut
+    wires[i].is_cut = wires[i].current_state;  // If HIGH at start, consider it cut
     wires[i].last_change_time = 0;
     wires[i].color = wire_colors[i];
   }
@@ -123,11 +124,15 @@ void setup() {
   
   Serial.println("Wire Cutting Puzzle Ready!");
   Serial.printf("This puzzle has %d steps to complete.\n", TOTAL_STEPS);
-  printWireStatus();
-  Serial.println("Commands: START, STATUS, JSON, STATS, RESET, HELP");
+  
+  // Check and sync wire states with hardware
+  checkWireStates();
+  
+  Serial.println("Commands: START, STATUS, JSON, STATS, RESET, CHECK, HELP");
   
   // Send initial status to MQTT
   sendGameStatusJSON();
+
 }
 
 void loop() {
@@ -136,11 +141,18 @@ void loop() {
     reconnectMQTT();
   }
   client.loop();
-  
-  updateWireStatus();
-  updateStatusLED();
-  handleSerialCommands();
-  
+  if (waiting == 0) {
+    // Module is waiting for all modules to connect
+    // Only handle MQTT and serial commands, no game logic
+    handleSerialCommands();
+  }
+  else if (waiting == 1) {
+    // All modules connected, normal operation
+    updateWireStatus();
+    updateStatusLED();
+    handleSerialCommands();
+  }
+
   delay(10);  // Small delay for stability
 }
 
@@ -159,20 +171,24 @@ void updateWireStatus() {
       wires[i].current_state = current_reading;
       wires[i].last_change_time = current_time;
       
-      // Detect wire cutting (HIGH to LOW transition)
-      if (wires[i].previous_state == HIGH && wires[i].current_state == LOW) {
+      // Detect wire cutting (LOW to HIGH transition)
+      // Wire goes from connected (LOW) to not connected (HIGH) = CUT
+      if (wires[i].previous_state == LOW && wires[i].current_state == HIGH) {
         if (!wires[i].is_cut) {
           wires[i].is_cut = true;
           total_cuts++;
+          Serial.printf("🔪 WIRE CUT DETECTED: %s wire disconnected!\n", wires[i].color.c_str());
           onWireCut(i);
         }
       }
       
-      // Detect wire reconnection (LOW to HIGH transition)
-      else if (wires[i].previous_state == LOW && wires[i].current_state == HIGH) {
+      // Detect wire reconnection (HIGH to LOW transition)
+      // Wire goes from not connected (HIGH) to connected (LOW) = RECONNECTED
+      else if (wires[i].previous_state == HIGH && wires[i].current_state == LOW) {
         if (wires[i].is_cut) {
           wires[i].is_cut = false;
           total_reconnections++;
+          Serial.printf("🔌 WIRE RECONNECTED: %s wire reconnected!\n", wires[i].color.c_str());
           onWireReconnected(i);
         }
       }
@@ -348,6 +364,9 @@ void handleSerialCommands() {
     }
     else if (command == "STEPS") {
       printAllSteps();
+    }
+    else if (command == "CHECK") {
+      checkWireStates();
     }
     else {
       Serial.println("Unknown command. Type HELP for available commands.");
@@ -561,6 +580,17 @@ void processMQTTMessage(String message) {
       Serial.println("❌ Wire game deactivated due to penalty");
       sendToRaspberryPi("WIRE_GAME_DEACTIVATED", "Wire game deactivated due to penalty");
     }
+    else if (command == "CHECK_WIRES") {
+      // Check wire states via MQTT
+      checkWireStates();
+      sendToRaspberryPi("WIRE_STATES_CHECKED", "Wire states checked and synchronized");
+    }
+    else if (command == "ACTIVATE") {
+      // Activate module - all modules are connected
+      waiting = 1;
+      Serial.println("🚀 Module activated! All modules connected.");
+      sendToRaspberryPi("MODULE_ACTIVATED", "Wire module activated and ready");
+    }
     else {
       Serial.printf("Unknown JSON command: %s\n", command.c_str());
     }
@@ -614,6 +644,38 @@ void sendToRaspberryPi(String message_type, String message_content) {
 
 // ===== END MQTT FUNCTIONS =====
 
+void checkWireStates() {
+  Serial.println("\n🔍 Checking current wire states...");
+  
+  for (int i = 0; i < NUM_WIRES; i++) {
+    // Read current pin state
+    bool current_reading = digitalRead(WIRE_PINS[i]);
+    
+    // Update internal state to match hardware
+    wires[i].current_state = current_reading;
+    wires[i].previous_state = current_reading;
+    wires[i].is_cut = current_reading;  // HIGH = cut, LOW = intact
+    wires[i].last_change_time = millis();
+    
+    // Display status
+    Serial.printf("Wire %d (%s, Pin %d): %s %s\n",
+                  i + 1,
+                  wires[i].color.c_str(),
+                  WIRE_PINS[i],
+                  current_reading ? "CUT" : "INTACT",
+                  current_reading ? "(HIGH)" : "(LOW)");
+  }
+  
+  // Count current cuts
+  int cut_count = 0;
+  for (int i = 0; i < NUM_WIRES; i++) {
+    if (wires[i].is_cut) cut_count++;
+  }
+  
+  Serial.printf("Summary: %d/%d wires currently cut\n", cut_count, NUM_WIRES);
+  Serial.println("Wire states synchronized with hardware!\n");
+}
+
 void printHelp() {
   Serial.println("\n=== AVAILABLE COMMANDS ===");
   Serial.println("START      - Begin the puzzle sequence");
@@ -622,6 +684,7 @@ void printHelp() {
   Serial.println("STATS      - Show game statistics");
   Serial.println("STEPS      - Show the complete puzzle sequence");
   Serial.println("RESET      - Reset statistics and game state");
+  Serial.println("CHECK      - Check and sync wire states with hardware");
   Serial.println("HELP       - Show this help message");
   Serial.println("\n=== GAME FLOW ===");
   Serial.println("1. Type START to begin the puzzle");

@@ -31,7 +31,7 @@ int targetTime = 2000;
 // Game state
 bool gameActive = true;
 bool gameWon = false;
-bool gameLost = false;
+int waiting = 0;    // Waiting for all modules to connect
 
 CRGB leds[NUM_LEDS];
 
@@ -78,11 +78,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   String command = doc["command"];
   
   if (command == "X") {
-    Serial.println("Received 'X' signal - Game Over!");
-    gameActive = false;
-    gameLost = true;
+    Serial.println("Received 'X' signal - Penalty applied!");
     
-    // Flash red LEDs to indicate game over
+    // Flash red LEDs to indicate penalty
     for (int i = 0; i < 3; i++) {
       fill_solid(leds, NUM_LEDS, CRGB::Red);
       FastLED.show();
@@ -91,12 +89,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
       FastLED.show();
       delay(300);
     }
+    
+    // Game continues after penalty
+    Serial.println("Game continues after penalty!");
   }
   else if (command == "START_GAME") {
     Serial.println("Starting new game!");
     gameActive = true;
     gameWon = false;
-    gameLost = false;
     currentLed = 0;
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
@@ -105,10 +105,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Resetting game!");
     gameActive = true;
     gameWon = false;
-    gameLost = false;
     currentLed = 0;
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
+  }
+  else if (command == "ACTIVATE") {
+    // Activate module - all modules are connected
+    waiting = 1;
+    Serial.println("🚀 Button module activated! All modules connected.");
+    sendConnectionStatus();
   }
 }
 
@@ -197,9 +202,17 @@ void loop() {
   }
   client.loop();
 
-  // Only process game logic if game is active
-  if (!gameActive) {
+  if (waiting == 0) {
+    // Module is waiting for all modules to connect
+    // Only handle MQTT, no game logic
     return;
+  }
+  else if (waiting == 1) {
+    // All modules connected, normal operation
+    // Only process game logic if game is active
+    if (!gameActive) {
+      return;
+    }
   }
 
   buttonState = digitalRead(buttonPin);
@@ -234,20 +247,21 @@ void loop() {
         FastLED.show();
       }
       else {
-        Serial.println("You Lose!");
-        gameLost = true;
-        gameActive = false;
+        Serial.println("Wrong timing! Try again!");
         
-        // Light up LEDs in red for lose
+        // Light up LEDs in red briefly for wrong timing
         fill_solid(leds, NUM_LEDS, CRGB::Red);
         FastLED.show();
         
-        // Send lose message to Raspberry Pi
+        // Send wrong timing message to Raspberry Pi (triggers X penalty)
         sendGameResult(false, pressDuration);
         
-        delay(3000);
+        delay(1000);
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         FastLED.show();
+        
+        // Game continues - don't set gameActive = false
+        Serial.println("Game continues - try again!");
       }
       
       int difference = pressDuration - targetTime;

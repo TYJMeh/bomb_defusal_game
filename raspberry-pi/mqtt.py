@@ -6,6 +6,15 @@ import os
 wire_game_completed = False
 maze_game_completed = False
 button_game_completed = False
+
+# Track module connections
+modules_connected = {
+    "wire": False,
+    "display": False,
+    "maze": False,
+    "button": False
+}
+
 BROKER = "192.168.1.201"
 CONFIG_FILE = "config.json"
 
@@ -63,6 +72,30 @@ def save_config(config):
         return True
     except Exception as e:
         print(f"Error saving config: {e}")
+        return False
+
+def check_all_modules_connected(client):
+    """Check if all modules are connected and send activation signal if so"""
+    global modules_connected
+    
+    all_connected = all(modules_connected.values())
+    
+    if all_connected:
+        print("🎉 All modules connected! Sending activation signal...")
+        
+        # Send activation signal to all modules
+        activation_command = {"command": "ACTIVATE"}
+        
+        # Send to all modules
+        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4", "rpi/to/display"]
+        for topic in topics:
+            client.publish(topic, json.dumps(activation_command))
+        
+        print("✅ Activation signals sent to all modules!")
+        return True
+    else:
+        missing_modules = [module for module, connected in modules_connected.items() if not connected]
+        print(f"⏳ Waiting for modules: {', '.join(missing_modules)}")
         return False
 
 def on_connect(client, userdata, flags, rc):
@@ -123,7 +156,13 @@ def on_message(client, userdata, msg):
         data = json.loads(message_payload)
        
         # Handle messages from first ESP32 (wire game)
-        if isinstance(data, dict) and data.get("type") == "WRONG_CUT_ALERT":
+        if isinstance(data, dict) and data.get("type") == "WIRE_MODULE_CONNECTED":
+            print("🔌 Wire module connected!")
+            print(f"Device: {data.get('device', 'Unknown')}")
+            modules_connected["wire"] = True
+            check_all_modules_connected(client)
+            
+        elif isinstance(data, dict) and data.get("type") == "WRONG_CUT_ALERT":
             print(f" WRONG CUT ALERT! ")
             print(f"Player cut {data['wrong_wire_cut']} wire")
             print(f"Expected {data['expected_wire']} wire")
@@ -141,6 +180,12 @@ def on_message(client, userdata, msg):
             check_all_games_completed(client)
            
         # Handle messages from third ESP32 (maze game)
+        elif isinstance(data, dict) and data.get("type") == "MAZE_MODULE_CONNECTED":
+            print("🎮 Maze module connected!")
+            print(f"Device: {data.get('device', 'Unknown')}")
+            modules_connected["maze"] = True
+            check_all_modules_connected(client)
+            
         elif isinstance(data, dict) and data.get("type") == "MAZE_COMPLETED":
             print(" MAZE COMPLETED! ")
             print(f"Player finished the maze!")
@@ -158,6 +203,13 @@ def on_message(client, userdata, msg):
             print(" Maze game restarted by player ")
            
         # Handle messages from fourth ESP32 (button game)
+        elif isinstance(data, dict) and data.get("type") == "BUTTON_MODULE_CONNECTED":
+            print("🔘 Button module connected!")
+            print(f"Device: {data.get('device', 'Unknown')}")
+            print(f"Target time: {data.get('target_time', 2000)}ms")
+            modules_connected["button"] = True
+            check_all_modules_connected(client)
+            
         elif isinstance(data, dict) and data.get("type") == "BUTTON_GAME_WON":
             print(" BUTTON GAME WON! ")
             print(f"Player won the button timing game!")
@@ -183,6 +235,8 @@ def on_message(client, userdata, msg):
             print("📺 Display module connected!")
             print(f"Device: {data.get('device', 'Unknown')}")
             print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+            modules_connected["display"] = True
+            check_all_modules_connected(client)
            
         elif isinstance(data, dict) and data.get("type") == "X_ADDED":
             print(f"❌ X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")

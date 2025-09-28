@@ -52,6 +52,7 @@ bool countdownActive = false;
 unsigned long lastUpdate = 0;
 int xCount = 0;
 int maxXCount = 3;  // Maximum X marks allowed
+int waiting = 0;    // Waiting for all modules to connect
 
 void setup() {
   Serial.begin(115200);
@@ -117,13 +118,25 @@ void loop() {
   }
   client.loop();
   
-  // Check if countdown is active and update every second
-  if (countdownActive && millis() - lastUpdate >= 1000) {
-    updateCountdown();
-    lastUpdate = millis();
+  if (waiting == 0) {
+    // Module is waiting for all modules to connect
+    // Only handle MQTT and serial commands, no game logic
+    handleSerialInput();
   }
-  
-  // Check for serial input
+  else if (waiting == 1) {
+    // All modules connected, normal operation
+    // Check if countdown is active and update every second
+    if (countdownActive && millis() - lastUpdate >= 1000) {
+      updateCountdown();
+      lastUpdate = millis();
+    }
+    
+    // Check for serial input
+    handleSerialInput();
+  }
+}
+
+void handleSerialInput() {
   if (Serial.available() > 0) {
     String input = Serial.readStringUntil('\n');
     input.trim();
@@ -243,6 +256,12 @@ void processMQTTMessage(String message) {
     }
     else if (type == "TEST") {
       testDisplays();
+    }
+    else if (type == "ACTIVATE") {
+      // Activate module - all modules are connected
+      waiting = 1;
+      Serial.println("🚀 Display module activated! All modules connected.");
+      sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
     }
     else {
       Serial.printf("Unknown JSON message type: %s\n", type.c_str());
