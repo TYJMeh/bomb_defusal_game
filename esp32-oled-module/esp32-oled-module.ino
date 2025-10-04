@@ -46,10 +46,13 @@ Adafruit_SSD1306 display2(SCREEN_WIDTH, SCREEN_HEIGHT_COUNTER, &I2C_2, OLED_RESE
 int countdownTime = 0;
 int initialCountdownTime = 0;
 bool countdownActive = false;
+bool countdownPaused = false;  // Track if timer is paused
 unsigned long lastUpdate = 0;
 int xCount = 0;
 int maxXCount = 3;
 int waiting = 0;
+unsigned long timerUpdateInterval = 1000;  // Base update interval (1 second)
+unsigned long lastHeartbeat = 0;  // Last time we sent a heartbeat
 
 void setup() {
   Serial.begin(115200);
@@ -99,7 +102,8 @@ void loop() {
   }
   client.loop();
   
-  if (countdownActive && millis() - lastUpdate >= 1000) {
+  // Update countdown with dynamic interval based on X count
+  if (countdownActive && millis() - lastUpdate >= timerUpdateInterval) {
     updateCountdown();
     lastUpdate = millis();
   }
@@ -314,6 +318,23 @@ void sendToRaspberryPi(String message_type, String message_content) {
 
 // ===== DISPLAY FUNCTIONS =====
 
+void updateTimerSpeed() {
+  // Update timer speed based on X count
+  // 0 X's = normal speed (1000ms = 1 second)
+  // 1 X = 25% faster (750ms = 1 second, so timer runs 1.33x speed)
+  // 2 X's = 50% faster (500ms = 1 second, so timer runs 2x speed)
+  
+  if (xCount == 0) {
+    timerUpdateInterval = 1000;  // Normal speed
+  } else if (xCount == 1) {
+    timerUpdateInterval = 750;   // 25% faster
+  } else if (xCount >= 2) {
+    timerUpdateInterval = 500;   // 50% faster
+  }
+  
+  Serial.printf("Timer speed updated: %d X's = %dms interval\n", xCount, timerUpdateInterval);
+}
+
 void addXMark(String source) {
   Serial.printf("🔍 addXMark called from: %s, current count: %d/%d\n", source.c_str(), xCount, maxXCount);
   
@@ -321,6 +342,7 @@ void addXMark(String source) {
     xCount++;
     Serial.printf("✅ X count increased to: %d/%d\n", xCount, maxXCount);
     updateXDisplay();
+    updateTimerSpeed();  // Update timer speed when X is added
     Serial.printf("❌ X added from %s! Total count: %d/%d\n", source.c_str(), xCount, maxXCount);
     
     sendToRaspberryPi("X_ADDED", "X mark added, total: " + String(xCount) + "/" + String(maxXCount));
@@ -339,6 +361,7 @@ void resetXCounter() {
   Serial.printf("🔄 Resetting X counter from %d to 0\n", xCount);
   xCount = 0;
   updateXDisplay();
+  updateTimerSpeed();  // Reset timer speed to normal
   Serial.println("🔄 X counter reset to 0");
   sendToRaspberryPi("X_RESET", "X counter reset to 0");
 }
@@ -494,10 +517,12 @@ void startCountdown(int seconds) {
   initialCountdownTime = seconds;
   countdownActive = true;
   lastUpdate = millis();
+  updateTimerSpeed();  // Set initial timer speed based on current X count
   
   displayCountdown();
   
   Serial.printf("⏰ Countdown started: %d seconds\n", seconds);
+  Serial.printf("Timer speed: %dms interval (%d X's)\n", timerUpdateInterval, xCount);
   sendToRaspberryPi("TIMER_STARTED", "Countdown started: " + String(seconds) + " seconds");
 }
 
@@ -539,6 +564,19 @@ void displayCountdown() {
   int barWidth = map(countdownTime, 0, initialCountdownTime, 0, 120);
   display1.drawRect(4, 55, 120, 6, SSD1306_WHITE);
   display1.fillRect(4, 55, barWidth, 6, SSD1306_WHITE);
+  
+  // Show speed indicator based on X count
+  if (xCount == 1) {
+    // Show 1.25x speed indicator
+    display1.setTextSize(1);
+    display1.setCursor(95, 45);
+    display1.print("1.3x");
+  } else if (xCount >= 2) {
+    // Show 2x speed indicator
+    display1.setTextSize(1);
+    display1.setCursor(100, 45);
+    display1.print("2x");
+  }
   
   if (countdownTime <= 10 && countdownTime > 0) {
     if ((millis() / 500) % 2) {
