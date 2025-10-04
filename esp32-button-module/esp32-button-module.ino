@@ -35,6 +35,9 @@ int waiting = 0;    // Waiting for all modules to connect
 
 CRGB leds[NUM_LEDS];
 
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 3000;
+
 void setup_wifi() {
   delay(10);
   Serial.println();
@@ -196,6 +199,21 @@ void setup() {
   Serial.println(" ms (+/- 500ms)");
 }
 
+void sendHeartbeat() {
+  if (client.connected() && waiting == 1) {
+    DynamicJsonDocument doc(128);
+    doc["type"] = "HEARTBEAT";
+    doc["device"] = "ESP32_Button";
+    doc["timestamp"] = millis();
+    doc["game_active"] = gameActive;
+    doc["game_won"] = gameWon;
+    
+    String output;
+    serializeJson(doc, output);
+    client.publish(publish_topic, output.c_str());
+  }
+}
+
 void loop() {
   if (!client.connected()) {
     reconnect();
@@ -213,6 +231,12 @@ void loop() {
     if (!gameActive) {
       return;
     }
+  }
+
+  // Send heartbeat every 3 seconds
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
   }
 
   buttonState = digitalRead(buttonPin);

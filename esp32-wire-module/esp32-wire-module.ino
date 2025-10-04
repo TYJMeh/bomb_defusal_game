@@ -2,6 +2,9 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 3000;  // Send heartbeat every 3 seconds
+
 // WiFi settings
 const char* ssid = "advaspire_2.4G";      // Replace with your WiFi SSID
 const char* password = "0172037375"; // Replace with your WiFi password
@@ -120,6 +123,21 @@ void setup() {
 
 }
 
+void sendHeartbeat() {
+  if (client.connected() && waiting == 1) {
+    StaticJsonDocument<128> doc;
+    doc["type"] = "HEARTBEAT";
+    doc["device"] = "ESP32_Wire";
+    doc["timestamp"] = millis();
+    doc["game_active"] = game_active;
+    doc["game_completed"] = game_completed;
+    
+    String json_string;
+    serializeJson(doc, json_string);
+    client.publish(topic_to_rpi, json_string.c_str());
+  }
+}
+
 void loop() {
   // Maintain MQTT connection
   if (!client.connected()) {
@@ -136,6 +154,12 @@ void loop() {
     updateWireStatus();
     updateStatusLED();
     handleSerialCommands();
+  }
+
+  // Send heartbeat every 3 seconds
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
   }
 
   delay(10);  // Small delay for stability

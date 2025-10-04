@@ -11,6 +11,9 @@
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 3000;
+
 // WiFi and MQTT settings
 const char* ssid = "advaspire_2.4G";
 const char* password = "0172037375";
@@ -95,6 +98,21 @@ void setup() {
   Serial.println("Maze Game Started!");
 }
 
+void sendHeartbeat() {
+  if (client.connected() && waiting == 1) {
+    StaticJsonDocument<128> doc;
+    doc["type"] = "HEARTBEAT";
+    doc["device"] = "ESP32_Maze";
+    doc["timestamp"] = millis();
+    doc["game_active"] = gameActive;
+    doc["game_won"] = gameWon;
+    
+    String json_string;
+    serializeJson(doc, json_string);
+    client.publish(publish_topic, json_string.c_str());
+  }
+}
+
 void loop() {
   // Maintain MQTT connection
   if (!client.connected()) {
@@ -118,6 +136,12 @@ void loop() {
       // Game is inactive - show waiting message
       displayWaitingMessage();
     }
+  }
+
+  // Send heartbeat every 3 seconds
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
   }
 
   int xValue = analogRead(JOY_X_PIN);
