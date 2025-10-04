@@ -94,11 +94,16 @@ def check_all_modules_connected(client):
         print("ALL MODULES CONNECTED! SENDING ACTIVATION SIGNAL...")
         print("="*50 + "\n")
         
+        # Load config to get timer duration
+        config = load_config()
+        game_duration = config.get("timer_settings", {}).get("game_duration", 360)
+        
         # Send activation signal to all modules
         activation_command = {
             "type": "ACTIVATE",
-            "command": "ACTIVATE",  # Include both for compatibility
+            "command": "ACTIVATE",
             "message": "All modules connected - system activated!",
+            "duration": game_duration,  # Include timer duration in activation
             "timestamp": int(time.time() * 1000)
         }
         
@@ -117,7 +122,7 @@ def check_all_modules_connected(client):
             time.sleep(0.1)  # Small delay between messages
         
         activation_sent = True
-        print("\nALL ACTIVATION SIGNALS SENT!\n")
+        print(f"\nALL ACTIVATION SIGNALS SENT WITH {game_duration}s TIMER!\n")
         return True
     elif all_connected and activation_sent:
         print("All modules connected and already activated")

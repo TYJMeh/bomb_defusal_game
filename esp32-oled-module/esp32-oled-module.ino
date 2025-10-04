@@ -327,7 +327,6 @@ void addXMark(String source) {
     
     if (xCount >= maxXCount) {
       Serial.println("🚨 MAXIMUM X COUNT REACHED!");
-      showMaxXReached();
       sendToRaspberryPi("MAX_X_REACHED", "Maximum X count reached: " + String(maxXCount));
     }
   } else {
