@@ -377,6 +377,16 @@ void handleSerialCommands() {
     else if (command == "CHECK") {
       checkWireStates();
     }
+    else if (command == "PAUSE_TIMER") {
+      game_active = false;
+      Serial.println("⏸️ Wire game paused");
+      sendToRaspberryPi("WIRE_GAME_PAUSED", "Wire game paused");
+    }
+    else if (command == "RESUME_TIMER") {
+      game_active = true;
+      Serial.println("▶️ Wire game resumed");
+      sendToRaspberryPi("WIRE_GAME_RESUMED", "Wire game resumed");
+    }
     else {
       Serial.println("Unknown command. Type HELP for available commands.");
     }

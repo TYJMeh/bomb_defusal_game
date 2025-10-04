@@ -118,6 +118,28 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("🚀 Button module activated! All modules connected.");
     sendConnectionStatus();
   }
+  else if (command == "PAUSE_TIMER") {
+    gameActive = false;
+    Serial.println("⏸️ Button game paused");
+    
+    // Visual feedback - orange/yellow LEDs
+    fill_solid(leds, NUM_LEDS, CRGB(255, 165, 0));
+    FastLED.show();
+    delay(500);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
+  }
+  else if (command == "RESUME_TIMER") {
+    gameActive = true;
+    Serial.println("▶️ Button game resumed");
+    
+    // Visual feedback - green flash
+    fill_solid(leds, NUM_LEDS, CRGB::Green);
+    FastLED.show();
+    delay(500);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
+  }
 }
 
 void reconnect() {

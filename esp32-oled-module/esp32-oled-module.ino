@@ -45,6 +45,7 @@ Adafruit_SSD1306 display2(SCREEN_WIDTH, SCREEN_HEIGHT_COUNTER, &I2C_2, OLED_RESE
 // Global variables
 int countdownTime = 0;
 int initialCountdownTime = 0;
+int pausedTimeRemaining = 0;  // Store remaining time when paused
 bool countdownActive = false;
 bool countdownPaused = false;  // Track if timer is paused
 unsigned long lastUpdate = 0;
@@ -233,7 +234,11 @@ void processMQTTMessage(String message) {
       Serial.printf("🚀 Starting timer for %d seconds\n", duration);
       startCountdown(duration);
     }
-    else if (type == "STOP_TIMER" || command == "STOP_TIMER") {
+      else if (type == "RESUME_TIMER" || command == "RESUME_TIMER") {
+        int remaining_time = duration;  // This line was causing the error
+        startCountdown(remaining_time);
+    }
+    else if (type == "PAUSE_TIMER" || command == "PAUSE_TIMER") {
       Serial.println("⏹️ Stopping timer via MQTT");
       stopCountdown();
     }
@@ -252,11 +257,15 @@ void processMQTTMessage(String message) {
     }
     else if (type == "GAME_OVER" || command == "GAME_OVER") {
       Serial.println("💥 Game Over received!");
+      pausedTimeRemaining = 0; 
+      countdownPaused = false;  
       stopCountdown();
       showGameOver();
     }
     else if (type == "VICTORY" || command == "VICTORY") {
       Serial.println("🎉 Victory received!");
+      pausedTimeRemaining = 0;
+      countdownPaused = false;
       stopCountdown();
       showVictory();
     }
@@ -610,18 +619,49 @@ void showTimesUp() {
 }
 
 void stopCountdown() {
-  countdownActive = false;
-  display1.clearDisplay();
-  display1.setTextSize(2);
-  display1.setTextColor(SSD1306_WHITE);
-  display1.setCursor(15, 20);
-  display1.println("STOPPED");
-  display1.setTextSize(1);
-  display1.setCursor(35, 45);
-  display1.println("Timer paused");
-  display1.display();
-  Serial.println("⏰ Countdown stopped");
-  sendToRaspberryPi("TIMER_STOPPED", "Countdown stopped by command");
+  if (countdownActive) {
+    // Store remaining time before stopping
+    pausedTimeRemaining = countdownTime;
+    countdownActive = false;
+    countdownPaused = true;  // Mark as paused, not stopped
+    
+    display1.clearDisplay();
+    display1.setTextSize(2);
+    display1.setTextColor(SSD1306_WHITE);
+    display1.setCursor(15, 15);
+    display1.println("PAUSED");
+    
+    // Show remaining time
+    display1.setTextSize(1);
+    display1.setCursor(25, 40);
+    int mins = pausedTimeRemaining / 60;
+    int secs = pausedTimeRemaining % 60;
+    display1.printf("Time: %02d:%02d", mins, secs);
+    
+    display1.display();
+    Serial.printf("⏸️ Countdown paused at %d seconds\n", pausedTimeRemaining);
+    sendToRaspberryPi("TIMER_PAUSED", "Countdown paused at " + String(pausedTimeRemaining) + " seconds");
+  }
+}
+
+void resumeCountdown() {
+  if (countdownPaused && pausedTimeRemaining > 0) {
+    countdownTime = pausedTimeRemaining;
+    countdownActive = true;
+    countdownPaused = false;
+    lastUpdate = millis();
+    updateTimerSpeed();  // Maintain current speed based on X count
+    
+    displayCountdown();
+    
+    Serial.printf("▶️ Countdown resumed: %d seconds remaining\n", countdownTime);
+    Serial.printf("Timer speed: %dms interval (%d X's)\n", timerUpdateInterval, xCount);
+    sendToRaspberryPi("TIMER_RESUMED", "Countdown resumed: " + String(countdownTime) + " seconds remaining");
+  } else if (!countdownPaused) {
+    Serial.println("⚠️ Timer is not paused - cannot resume");
+  } else if (pausedTimeRemaining <= 0) {
+    Serial.println("⚠️ No time remaining to resume");
+  }
 }
 
 void updateXDisplay() {
@@ -652,3 +692,4 @@ void updateXDisplay() {
   
   Serial.printf("X Display Update: %d/%d X marks shown\n", xCount, maxXCount);
 }
+

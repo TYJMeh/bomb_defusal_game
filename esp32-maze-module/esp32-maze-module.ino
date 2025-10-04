@@ -411,7 +411,17 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       playerY = 1;
       Serial.println("Game reset via MQTT");
       
-    } else if (command == "X") {
+    } else if (command == "PAUSE_TIMER") {
+      gameActive = false;
+      Serial.println("⏸️ Maze game paused");
+      sendMqttMessage("MAZE_PAUSED", "Maze game paused");
+    }
+      else if (command == "RESUME_TIMER") {
+      gameActive = true;
+      Serial.println("▶️ Maze game resumed");
+      sendMqttMessage("MAZE_RESUMED", "Maze game resumed");
+    }
+    else if (command == "X") {
       gameActive = false;
       Serial.println("Game deactivated via X command");
     } else if (command == "ACTIVATE") {
