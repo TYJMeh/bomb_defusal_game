@@ -229,6 +229,12 @@ def on_message(client, userdata, msg):
     try:
         # Try parsing as JSON
         data = json.loads(message_payload)
+        
+        # Check if data is a dictionary (not int, string, etc.)
+        if not isinstance(data, dict):
+            print(f"[PARSED] Non-dict JSON: {data} (type: {type(data).__name__})")
+            return
+        
         msg_type = data.get("type", "")
         
         print(f"[PARSED] Type: {msg_type}")
