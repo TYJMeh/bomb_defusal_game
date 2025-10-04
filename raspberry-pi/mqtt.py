@@ -192,13 +192,29 @@ def on_connect(client, userdata, flags, rc):
     
     print("\nWaiting for ESP32 modules to connect...")
     print("-" * 50)
+    
+    # Start heartbeat checker thread
+    import threading
+    heartbeat_thread = threading.Thread(target=check_heartbeats, args=(client,), daemon=True)
+    heartbeat_thread.start()
 
 def on_message(client, userdata, msg):
     global button_game_completed, wire_game_completed, maze_game_completed
-    global modules_connected
+    global modules_connected, module_last_seen
    
     topic = msg.topic
     message_payload = msg.payload.decode()
+    
+    # Update last seen timestamp for the module
+    current_time = time.time()
+    if topic == "esp/to/rpi":
+        module_last_seen["wire"] = current_time
+    elif topic == "esp2/to/rpi":
+        module_last_seen["display"] = current_time
+    elif topic == "esp3/to/rpi":
+        module_last_seen["maze"] = current_time
+    elif topic == "esp4/to/rpi":
+        module_last_seen["button"] = current_time
     
     # Debug: Print all received messages
     print(f"\n[RAW] Topic: {topic}")
@@ -256,7 +272,12 @@ def on_message(client, userdata, msg):
         # === CONNECTION STATUS HANDLING ===
         # This is the KEY FIX - handle connection messages regardless of topic
         
-        if msg_type == "DISPLAY_CONNECTED":
+        if msg_type == "HEARTBEAT":
+            # Silently handle heartbeat - already updated module_last_seen above
+            # Don't print anything to avoid spam
+            pass
+        
+        elif msg_type == "DISPLAY_CONNECTED":
             print("\nDISPLAY MODULE CONNECTED!")
             print(f"  Device: {data.get('device', 'Unknown')}")
             modules_connected["display"] = True
@@ -471,7 +492,7 @@ def stop_all_games(client):
 def reset_all_games(client):
     """Reset all games to initial state"""
     global wire_game_completed, maze_game_completed, button_game_completed
-    global activation_sent
+    global activation_sent, games_paused
    
     print("\nResetting all games...")
    
@@ -479,6 +500,7 @@ def reset_all_games(client):
     maze_game_completed = False
     button_game_completed = False
     activation_sent = False  # Allow reactivation
+    games_paused = False  # Reset pause state
    
     reset_commands = {
         "rpi/to/esp": {"type": "RESET_GAME", "command": "RESET_GAME"},
@@ -491,6 +513,73 @@ def reset_all_games(client):
         client.publish(topic, json.dumps(command))
        
     print("All games reset!")
+
+def check_heartbeats(client):
+    """Check if modules are still connected via heartbeat timeout"""
+    global modules_connected, module_last_seen, activation_sent, games_paused
+    
+    HEARTBEAT_TIMEOUT = 10  # seconds - consider disconnected if no message for 10s
+    
+    while True:
+        time.sleep(2)  # Check every 2 seconds
+        
+        if not activation_sent:
+            continue  # Don't check until system is activated
+        
+        current_time = time.time()
+        any_disconnected = False
+        disconnected_modules = []
+        
+        for module, last_seen in module_last_seen.items():
+            if last_seen == 0:
+                continue  # Module never connected
+            
+            time_since_last_seen = current_time - last_seen
+            
+            if time_since_last_seen > HEARTBEAT_TIMEOUT:
+                if modules_connected[module]:
+                    print(f"\n WARNING: {module.upper()} MODULE DISCONNECTED!")
+                    print(f"  Last seen: {time_since_last_seen:.1f} seconds ago")
+                    modules_connected[module] = False
+                    any_disconnected = True
+                    disconnected_modules.append(module)
+        
+        # If any module disconnected, pause the games
+        if any_disconnected and not games_paused:
+            print(f"\n PAUSING GAMES - Disconnected modules: {', '.join([m.upper() for m in disconnected_modules])}")
+            pause_all_games(client)
+            games_paused = True
+        
+        # If all reconnected, resume the games
+        elif not any_disconnected and games_paused:
+            # Check if all modules that were initially connected are back
+            all_reconnected = all(modules_connected.values())
+            if all_reconnected:
+                print(f"\n ALL MODULES RECONNECTED - RESUMING GAMES")
+                resume_all_games(client)
+                games_paused = False
+
+def pause_all_games(client):
+    """Pause all games due to disconnection"""
+    pause_command = {
+        "type": "PAUSE_TIMER",
+        "command": "PAUSE_TIMER",
+        "reason": "module_disconnected"
+    }
+    
+    client.publish("rpi/to/esp2", json.dumps(pause_command))
+    print("Timer paused due to disconnection")
+
+def resume_all_games(client):
+    """Resume all games after reconnection"""
+    resume_command = {
+        "type": "RESUME_TIMER",
+        "command": "RESUME_TIMER",
+        "reason": "module_reconnected"
+    }
+    
+    client.publish("rpi/to/esp2", json.dumps(resume_command))
+    print("Timer resumed after reconnection")
 
 def main():
     client = mqtt.Client()
@@ -531,4 +620,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
