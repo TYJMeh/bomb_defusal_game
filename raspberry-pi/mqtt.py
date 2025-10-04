@@ -16,8 +16,17 @@ modules_connected = {
     "button": False
 }
 
+# Track last heartbeat from each module
+module_last_seen = {
+    "wire": 0,
+    "display": 0,
+    "maze": 0,
+    "button": 0
+}
+
 # Track if activation has been sent
 activation_sent = False
+games_paused = False  # Track if games are paused due to disconnect
 
 BROKER = "192.168.1.201"
 CONFIG_FILE = "config.json"
