@@ -284,8 +284,10 @@ def on_message(client, userdata, msg):
             print(f"X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
            
         elif msg_type == "MAX_X_REACHED":
-            print("MAXIMUM X COUNT REACHED!")
+            print("MAXIMUM X COUNT REACHED - GAME OVER!")
             print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+            # Trigger game over when max X is reached
+            handle_timer_finished(client)
            
         elif msg_type == "TIMER_STARTED":
             print(f"Display timer started: {data.get('message', 'Unknown duration')}")
