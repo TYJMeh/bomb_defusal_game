@@ -56,21 +56,6 @@ PuzzleStep puzzle_sequence[] = {
     "STEP 1: Cut the RED wire to begin",
     0,  // RED wire (index 0)
     "RED wire cut correctly! Next step..."
-  },
-  {
-    "STEP 2: Now cut the BLUE wire",
-    1,  // BLUE wire (index 1) 
-    "BLUE wire cut correctly! Next step..."
-  },
-  {
-    "STEP 3: Cut the GREEN wire carefully",
-    2,  // GREEN wire (index 2)
-    "GREEN wire cut correctly! Next step..."
-  },
-  {
-    "STEP 4: Finally, cut the YELLOW wire to complete",
-    3,  // YELLOW wire (index 3)
-    "PUZZLE COMPLETED! All steps finished successfully!"
   }
 };
 

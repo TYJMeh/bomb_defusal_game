@@ -8,13 +8,16 @@ wire_game_completed = False
 maze_game_completed = False
 button_game_completed = False
 
-# Track module connections
+# Track module connections with better tracking
 modules_connected = {
     "wire": False,
     "display": False,
     "maze": False,
     "button": False
 }
+
+# Track if activation has been sent
+activation_sent = False
 
 BROKER = "192.168.1.201"
 CONFIG_FILE = "config.json"
@@ -55,7 +58,6 @@ def load_config():
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON in {CONFIG_FILE}: {e}")
         print("Creating backup and using default config...")
-        # Create backup of corrupted file
         with open(f"{CONFIG_FILE}.backup", "w") as backup:
             with open(CONFIG_FILE, "r") as original:
                 backup.write(original.read())
@@ -77,72 +79,116 @@ def save_config(config):
 
 def check_all_modules_connected(client):
     """Check if all modules are connected and send activation signal if so"""
-    global modules_connected
+    global modules_connected, activation_sent
+    
+    # Print current status for debugging
+    print("\n=== MODULE CONNECTION STATUS ===")
+    for module, status in modules_connected.items():
+        print(f"  {module.upper()}: {'CONNECTED' if status else 'WAITING...'}")
+    print("================================\n")
     
     all_connected = all(modules_connected.values())
     
-    if all_connected:
-        print("🎉 All modules connected! Sending activation signal...")
+    if all_connected and not activation_sent:
+        print("\n" + "="*50)
+        print("ALL MODULES CONNECTED! SENDING ACTIVATION SIGNAL...")
+        print("="*50 + "\n")
         
         # Send activation signal to all modules
-        # FIXED: Use proper JSON format with "type" field
         activation_command = {
             "type": "ACTIVATE",
+            "command": "ACTIVATE",  # Include both for compatibility
             "message": "All modules connected - system activated!",
-            "timestamp": int(time.time() * 1000)  # Add timestamp
+            "timestamp": int(time.time() * 1000)
         }
         
         # Send to all modules with their specific topics
-        topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+        topics = {
+            "rpi/to/esp": "Wire Module",
+            "rpi/to/esp2": "Display Module", 
+            "rpi/to/esp3": "Maze Module",
+            "rpi/to/esp4": "Button Module"
+        }
         
-        for topic in topics:
-            client.publish(topic, json.dumps(activation_command))
-            print(f"  ✅ Sent activation to {topic}")
+        for topic, module_name in topics.items():
+            result = client.publish(topic, json.dumps(activation_command))
+            print(f"  SENT ACTIVATION to {module_name} ({topic})")
+            print(f"    Result: {'SUCCESS' if result.rc == mqtt.MQTT_ERR_SUCCESS else 'FAILED'}")
+            time.sleep(0.1)  # Small delay between messages
         
-        print("✅ All activation signals sent!")
+        activation_sent = True
+        print("\nALL ACTIVATION SIGNALS SENT!\n")
+        return True
+    elif all_connected and activation_sent:
+        print("All modules connected and already activated")
         return True
     else:
         missing_modules = [module for module, connected in modules_connected.items() if not connected]
-        print(f"⏳ Waiting for modules: {', '.join(missing_modules)}")
+        print(f"WAITING FOR: {', '.join([m.upper() for m in missing_modules])}")
         return False
 
 def start_game_timer(client, duration=300):
     """Start the game timer on the display module"""
     timer_command = {
         "type": "START_TIMER",
+        "command": "START_TIMER",
         "duration": duration,
         "message": f"Game timer started for {duration} seconds"
     }
     
     client.publish("rpi/to/esp2", json.dumps(timer_command))
-    print(f"🚀 Game timer started: {duration} seconds")
+    print(f"Game timer started: {duration} seconds")
 
 def send_x_to_display(client, reason="GAME_FAILURE"):
     """Send X mark to display"""
     x_command = {
         "type": "X",
+        "command": "X",
         "message": f"X mark added due to: {reason}"
     }
     
     client.publish("rpi/to/esp2", json.dumps(x_command))
-    print(f"❌ X mark sent to display: {reason}")
+    print(f"X mark sent to display: {reason}")
 
 def on_connect(client, userdata, flags, rc):
-    print(f"Connected with result code {rc}")
-    client.subscribe("esp/to/rpi")     # First ESP32 (wire game)
-    client.subscribe("esp2/to/rpi")    # Second ESP32 (timer)
-    client.subscribe("esp3/to/rpi")    # Third ESP32 (maze game)
-    client.subscribe("esp4/to/rpi")    # Fourth ESP32 (button game)
-    client.subscribe("display/to/rpi") # ESP32 Display module
-    client.subscribe("config/request") # Config requests
-    client.subscribe("config/update")  # Config updates
+    if rc == 0:
+        print(f"\nSUCCESSFULLY CONNECTED TO MQTT BROKER")
+        print(f"Connection result code: {rc}")
+    else:
+        print(f"\nFAILED TO CONNECT TO MQTT BROKER")
+        print(f"Connection result code: {rc}")
+        return
+    
+    # Subscribe to all topics
+    topics = [
+        ("esp/to/rpi", 0),      # Wire module
+        ("esp2/to/rpi", 0),     # Display module
+        ("esp3/to/rpi", 0),     # Maze module
+        ("esp4/to/rpi", 0),     # Button module
+        ("config/request", 0),  # Config requests
+        ("config/update", 0)    # Config updates
+    ]
+    
+    for topic, qos in topics:
+        result, mid = client.subscribe(topic, qos)
+        if result == mqtt.MQTT_ERR_SUCCESS:
+            print(f"  SUBSCRIBED to {topic}")
+        else:
+            print(f"  FAILED to subscribe to {topic}")
+    
+    print("\nWaiting for ESP32 modules to connect...")
+    print("-" * 50)
 
 def on_message(client, userdata, msg):
     global button_game_completed, wire_game_completed, maze_game_completed
+    global modules_connected
    
     topic = msg.topic
     message_payload = msg.payload.decode()
-    print(f"📨 Received on {topic}: {message_payload}")
+    
+    # Debug: Print all received messages
+    print(f"\n[RAW] Topic: {topic}")
+    print(f"[RAW] Payload: {message_payload}")
    
     # Handle configuration requests
     if topic == "config/request":
@@ -162,10 +208,10 @@ def on_message(client, userdata, msg):
                 client.publish("config/ack", json.dumps({"status": "success", "message": "Config updated"}))
                 print("Config updated successfully")
                
-                # Apply new timer settings to timer ESP32
                 if "timer_settings" in new_config:
                     timer_update = {
                         "type": "UPDATE_SETTINGS",
+                        "command": "UPDATE_SETTINGS",
                         "settings": new_config["timer_settings"]
                     }
                     client.publish("rpi/to/esp2", json.dumps(timer_update))
@@ -183,147 +229,135 @@ def on_message(client, userdata, msg):
     try:
         # Try parsing as JSON
         data = json.loads(message_payload)
-       
-        # Handle messages from ESP32 Display (esp2/to/rpi)
-        if topic == "esp2/to/rpi":
-            if isinstance(data, dict):
-                msg_type = data.get("type", "")
-                
-                if msg_type == "DISPLAY_CONNECTED":
-                    print("📺 Display module connected!")
-                    print(f"Device: {data.get('device', 'Unknown')}")
-                    modules_connected["display"] = True
-                    check_all_modules_connected(client)
-                    
-                elif msg_type == "DISPLAY_ACTIVATED":
-                    print("✅ Display module activated and ready")
-                    
-                elif msg_type == "TIMER_FINISHED":
-                    print("⏰ TIMER FINISHED - GAME OVER!")
-                    handle_timer_finished(client)
-                    
-                elif msg_type == "X_ADDED":
-                    print(f"❌ X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-                   
-                elif msg_type == "MAX_X_REACHED":
-                    print("🚨 DISPLAY: Maximum X count reached!")
-                    print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-                   
-                elif msg_type == "TIMER_STARTED":
-                    print(f"⏰ Display timer started: {data.get('message', 'Unknown duration')}")
-                   
-                elif msg_type == "TIMER_STOPPED":
-                    print(f"⏹️ Display timer stopped: {data.get('message', 'Unknown reason')}")
+        msg_type = data.get("type", "")
         
-        # Handle messages from wire module (esp/to/rpi)
-        elif topic == "esp/to/rpi":
-            if isinstance(data, dict):
-                msg_type = data.get("type", "")
-                
-                if msg_type == "WIRE_MODULE_CONNECTED":
-                    print("🔌 Wire module connected!")
-                    print(f"Device: {data.get('device', 'Unknown')}")
-                    modules_connected["wire"] = True
-                    check_all_modules_connected(client)
-                    
-                elif msg_type == "WRONG_CUT_ALERT":
-                    print(f"❌ WRONG CUT ALERT!")
-                    print(f"Player cut {data['wrong_wire_cut']} wire")
-                    print(f"Expected {data['expected_wire']} wire")
-                    print(f"Step: {data['current_step']}/{data['total_steps']}")
-                    # Send "X" signal to display ESP32
-                    send_x_to_display(client, "WRONG_WIRE_CUT")
-                   
-                elif msg_type == "PUZZLE_COMPLETED":
-                    print("🎉 Wire game completed by first ESP32!")
-                    wire_game_completed = True
-                    check_all_games_completed(client)
+        print(f"[PARSED] Type: {msg_type}")
         
-        # Handle messages from maze module (esp3/to/rpi)
-        elif topic == "esp3/to/rpi":
-            if isinstance(data, dict):
-                msg_type = data.get("type", "")
-                
-                if msg_type == "MAZE_MODULE_CONNECTED":
-                    print("🎮 Maze module connected!")
-                    print(f"Device: {data.get('device', 'Unknown')}")
-                    modules_connected["maze"] = True
-                    check_all_modules_connected(client)
-                    
-                elif msg_type == "MAZE_COMPLETED":
-                    print("🎉 MAZE COMPLETED!")
-                    print(f"Player finished the maze!")
-                    maze_game_completed = True
-                    check_all_games_completed(client)
-                   
-                elif msg_type == "WALL_HIT":
-                    print(f"❌ WALL HIT IN MAZE!")
-                    print(f"Player hit a wall and returned to start")
-                    # Send "X" signal to display ESP32
-                    send_x_to_display(client, "MAZE_WALL_HIT")
-                   
-                elif msg_type == "GAME_RESTART":
-                    print("🔄 Maze game restarted by player")
+        # === CONNECTION STATUS HANDLING ===
+        # This is the KEY FIX - handle connection messages regardless of topic
         
-        # Handle messages from button module (esp4/to/rpi)
-        elif topic == "esp4/to/rpi":
-            if isinstance(data, dict):
-                msg_type = data.get("type", "")
-                
-                if msg_type == "BUTTON_MODULE_CONNECTED":
-                    print("🔘 Button module connected!")
-                    print(f"Device: {data.get('device', 'Unknown')}")
-                    print(f"Target time: {data.get('target_time', 2000)}ms")
-                    modules_connected["button"] = True
-                    check_all_modules_connected(client)
-                    
-                elif msg_type == "BUTTON_GAME_WON":
-                    print("🎉 BUTTON GAME WON!")
-                    print(f"Player won the button timing game!")
-                    print(f"Press duration: {data['press_duration']}ms")
-                    print(f"Target time: {data['target_time']}ms")
-                    print(f"Difference: {data['difference']}ms")
-                    button_game_completed = True
-                    check_all_games_completed(client)
-                   
-                elif msg_type == "BUTTON_GAME_LOST":
-                    print("❌ BUTTON GAME LOST!")
-                    print(f"Player lost the button timing game!")
-                    print(f"Press duration: {data['press_duration']}ms")
-                    print(f"Target time: {data['target_time']}ms")
-                    print(f"Difference: {data['difference']}ms")
-                    # Send "X" signal to display ESP32
-                    send_x_to_display(client, "BUTTON_GAME_LOST")
+        if msg_type == "DISPLAY_CONNECTED":
+            print("\nDISPLAY MODULE CONNECTED!")
+            print(f"  Device: {data.get('device', 'Unknown')}")
+            modules_connected["display"] = True
+            check_all_modules_connected(client)
+            
+        elif msg_type == "WIRE_MODULE_CONNECTED":
+            print("\nWIRE MODULE CONNECTED!")
+            print(f"  Device: {data.get('device', 'Unknown')}")
+            modules_connected["wire"] = True
+            check_all_modules_connected(client)
+            
+        elif msg_type == "MAZE_MODULE_CONNECTED":
+            print("\nMAZE MODULE CONNECTED!")
+            print(f"  Device: {data.get('device', 'Unknown')}")
+            modules_connected["maze"] = True
+            check_all_modules_connected(client)
+            
+        elif msg_type == "BUTTON_MODULE_CONNECTED":
+            print("\nBUTTON MODULE CONNECTED!")
+            print(f"  Device: {data.get('device', 'Unknown')}")
+            print(f"  Target time: {data.get('target_time', 2000)}ms")
+            modules_connected["button"] = True
+            check_all_modules_connected(client)
+        
+        # === ACTIVATION ACKNOWLEDGMENT ===
+        elif msg_type == "DISPLAY_ACTIVATED":
+            print("Display module activated and ready")
+            
+        elif msg_type == "MODULE_ACTIVATED":
+            module_name = data.get('device', 'Unknown')
+            print(f"{module_name} activated and ready")
+        
+        # === GAME EVENT HANDLING ===
+        elif msg_type == "TIMER_FINISHED":
+            print("\nTIMER FINISHED - GAME OVER!")
+            handle_timer_finished(client)
+            
+        elif msg_type == "X_ADDED":
+            print(f"X mark added to display! Total: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+           
+        elif msg_type == "MAX_X_REACHED":
+            print("MAXIMUM X COUNT REACHED!")
+            print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
+           
+        elif msg_type == "TIMER_STARTED":
+            print(f"Display timer started: {data.get('message', 'Unknown duration')}")
+           
+        elif msg_type == "TIMER_STOPPED":
+            print(f"Display timer stopped: {data.get('message', 'Unknown reason')}")
+            
+        elif msg_type == "WRONG_CUT_ALERT":
+            print(f"\nWRONG WIRE CUT!")
+            print(f"  Player cut: {data.get('wrong_wire_cut', 'Unknown')} wire")
+            print(f"  Expected: {data.get('expected_wire', 'Unknown')} wire")
+            print(f"  Step: {data.get('current_step', '?')}/{data.get('total_steps', '?')}")
+            send_x_to_display(client, "WRONG_WIRE_CUT")
+           
+        elif msg_type == "PUZZLE_COMPLETED":
+            print("\nWIRE GAME COMPLETED!")
+            wire_game_completed = True
+            check_all_games_completed(client)
+            
+        elif msg_type == "MAZE_COMPLETED":
+            print("\nMAZE COMPLETED!")
+            maze_game_completed = True
+            check_all_games_completed(client)
+           
+        elif msg_type == "WALL_HIT":
+            print("\nWALL HIT IN MAZE!")
+            print("Player returned to start")
+            send_x_to_display(client, "MAZE_WALL_HIT")
+           
+        elif msg_type == "GAME_RESTART":
+            print("Maze game restarted by player")
+            
+        elif msg_type == "BUTTON_GAME_WON":
+            print("\nBUTTON GAME WON!")
+            print(f"  Press duration: {data.get('press_duration', 0)}ms")
+            print(f"  Target time: {data.get('target_time', 0)}ms")
+            print(f"  Difference: {data.get('difference', 0)}ms")
+            button_game_completed = True
+            check_all_games_completed(client)
+           
+        elif msg_type == "BUTTON_GAME_LOST":
+            print("\nBUTTON GAME LOST!")
+            print(f"  Press duration: {data.get('press_duration', 0)}ms")
+            print(f"  Target time: {data.get('target_time', 0)}ms")
+            print(f"  Difference: {data.get('difference', 0)}ms")
+            send_x_to_display(client, "BUTTON_GAME_LOST")
+        
+        else:
+            print(f"Unknown message type: {msg_type}")
            
     except json.JSONDecodeError as e:
-        print(f"❌ JSON decode error: {e}")
+        print(f"JSON decode error: {e}")
         print(f"Raw message: '{message_payload}'")
         
-        # Handle non-JSON messages (e.g., "1" from second ESP32)
+        # Handle non-JSON messages
         message = message_payload.strip()
-       
         if message == "1":
             print("Received '1' signal from ESP32")
-            # Handle accordingly based on topic
             if topic == "esp2/to/rpi":
-                print("Signal from display module")
+                print("  Signal from display module")
         else:
             print(f"Unknown non-JSON message: {message}")
     except Exception as e:
-        print(f"❌ Error processing message: {e}")
+        print(f"Error processing message: {e}")
+        import traceback
+        traceback.print_exc()
 
 def handle_timer_finished(client):
     """Handle when the display timer finishes - trigger game over"""
-    print("💥 TIMER FINISHED - GAME OVER!")
+    print("\nGAME OVER - TIME'S UP!")
     
-    # Send game over signal to all modules
     game_over_message = {
         "type": "GAME_OVER",
+        "command": "GAME_OVER",
         "message": "Time's up! Game over!",
         "reason": "timer_finished"
     }
     
-    # Send to all ESP32s including display
     topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
     for topic in topics:
         client.publish(topic, json.dumps(game_over_message))
@@ -335,16 +369,17 @@ def check_all_games_completed(client):
     global wire_game_completed, maze_game_completed, button_game_completed
    
     if wire_game_completed and maze_game_completed and button_game_completed:
-        print("\n🎉 ALL GAMES COMPLETED! VICTORY! 🎉")
+        print("\n" + "="*50)
+        print("ALL GAMES COMPLETED! VICTORY!")
+        print("="*50 + "\n")
        
-        # Send victory signal to all ESP32s including display
         victory_message = {
             "type": "VICTORY",
+            "command": "VICTORY",
             "message": "All puzzles completed!",
             "timestamp": int(time.time() * 1000)
         }
        
-        # Send to all ESP32s including display
         topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
         for topic in topics:
             client.publish(topic, json.dumps(victory_message))
@@ -355,14 +390,12 @@ def start_all_games(client):
     """Start all games simultaneously"""
     global wire_game_completed, maze_game_completed, button_game_completed
    
-    print("🚀 Starting all games simultaneously...")
+    print("\nStarting all games simultaneously...")
    
-    # Reset completion status
     wire_game_completed = False
     maze_game_completed = False
     button_game_completed = False
    
-    # Load current config for timer settings
     config = load_config()
     timer_settings = config.get("timer_settings", {
         "game_duration": 300,
@@ -370,45 +403,43 @@ def start_all_games(client):
         "countdown_start": 10
     })
    
-    # Send start commands to all ESP32s
     start_commands = {
-        "rpi/to/esp": {"type": "START_GAME", "reset": True},
-        "rpi/to/esp3": {"type": "START_GAME", "reset_position": True},
-        "rpi/to/esp4": {"type": "START_GAME", "new_round": True}
+        "rpi/to/esp": {"type": "START_GAME", "command": "START_GAME", "reset": True},
+        "rpi/to/esp3": {"type": "START_GAME", "command": "START_GAME", "reset_position": True},
+        "rpi/to/esp4": {"type": "START_GAME", "command": "START_GAME", "new_round": True}
     }
    
-    # Send countdown signal first
     sync_start = {
         "type": "SYNCHRONIZED_START",
+        "command": "SYNCHRONIZED_START",
         "countdown": 3
     }
    
     for topic in start_commands.keys():
         client.publish(topic, json.dumps(sync_start))
-    
-    # Also send to display
     client.publish("rpi/to/esp2", json.dumps(sync_start))
    
     print("Countdown started...")
     time.sleep(3)
    
-    # Send actual start commands to game modules
     for topic, command in start_commands.items():
         client.publish(topic, json.dumps(command))
         time.sleep(0.1)
     
-    # Start the timer on display module
     start_game_timer(client, timer_settings.get("game_duration", 300))
        
-    print("🎮 All games started!")
+    print("All games started!")
 
 def stop_all_games(client):
     """Stop all games"""
-    print("⏹️ Stopping all games...")
+    print("\nStopping all games...")
    
-    stop_command = {"type": "STOP_GAME", "reason": "manual_stop"}
+    stop_command = {
+        "type": "STOP_GAME",
+        "command": "STOP_GAME",
+        "reason": "manual_stop"
+    }
     
-    # Stop all modules
     topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
     for topic in topics:
         client.publish(topic, json.dumps(stop_command))
@@ -418,20 +449,20 @@ def stop_all_games(client):
 def reset_all_games(client):
     """Reset all games to initial state"""
     global wire_game_completed, maze_game_completed, button_game_completed
+    global activation_sent
    
-    print("🔄 Resetting all games...")
+    print("\nResetting all games...")
    
-    # Reset completion tracking
     wire_game_completed = False
     maze_game_completed = False
     button_game_completed = False
+    activation_sent = False  # Allow reactivation
    
-    # Send reset commands
     reset_commands = {
-        "rpi/to/esp": {"type": "RESET_GAME"},
-        "rpi/to/esp2": {"type": "RESET_X"},
-        "rpi/to/esp3": {"type": "RESET_GAME"},
-        "rpi/to/esp4": {"type": "RESET_GAME"}
+        "rpi/to/esp": {"type": "RESET_GAME", "command": "RESET_GAME"},
+        "rpi/to/esp2": {"type": "RESET_X", "command": "RESET_X"},
+        "rpi/to/esp3": {"type": "RESET_GAME", "command": "RESET_GAME"},
+        "rpi/to/esp4": {"type": "RESET_GAME", "command": "RESET_GAME"}
     }
    
     for topic, command in reset_commands.items():
@@ -440,28 +471,24 @@ def reset_all_games(client):
     print("All games reset!")
 
 def main():
-    # Initialize MQTT client
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
    
-    # Load initial config
     config = load_config()
     print("Initial config loaded:", json.dumps(config, indent=2))
    
-    print("\n🎮 Available commands:")
+    print("\nAvailable commands:")
     print("- start_all_games()")
     print("- stop_all_games()")
     print("- reset_all_games()")
-    print("- start_game_timer(duration=300)")
-    print("- send_x_to_display(reason='TEST')")
+    print("- start_timer(duration=300)")
+    print("- add_x(reason='TEST')")
    
     try:
-        # Connect and start
         client.connect(BROKER, 1883, 60)
-        print(f"🔌 Connecting to MQTT broker at {BROKER}:1883")
+        print(f"\nConnecting to MQTT broker at {BROKER}:1883")
        
-        # Make functions available globally for easy access
         import builtins
         builtins.start_all_games = lambda: start_all_games(client)
         builtins.stop_all_games = lambda: stop_all_games(client)
@@ -472,11 +499,13 @@ def main():
         client.loop_forever()
        
     except KeyboardInterrupt:
-        print("\n👋 Shutting down...")
+        print("\nShutting down...")
         stop_all_games(client)
         client.disconnect()
     except Exception as e:
-        print(f"❌ Connection error: {e}")
+        print(f"Connection error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

@@ -273,6 +273,9 @@ void processMQTTMessage(String message) {
       waiting = 1;  // Set waiting to 1 to indicate module is activated
       Serial.println("🚀 Display module activated! All modules connected.");
       sendToRaspberryPi("DISPLAY_ACTIVATED", "Display module activated and ready");
+      int duration = doc["duration"] | 300;  // Default 300 seconds (5 minutes)
+      Serial.printf("🚀 Starting timer for %d seconds\n", duration);
+      startCountdown(duration);
       
       // Update display to show activated state
       showActivatedMessage();
