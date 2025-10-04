@@ -518,46 +518,61 @@ def check_heartbeats(client):
     """Check if modules are still connected via heartbeat timeout"""
     global modules_connected, module_last_seen, activation_sent, games_paused
     
-    HEARTBEAT_TIMEOUT = 10  # seconds - consider disconnected if no message for 10s
+    HEARTBEAT_TIMEOUT = 20  # seconds
     
     while True:
-        time.sleep(2)  # Check every 2 seconds
+        time.sleep(2)
         
         if not activation_sent:
-            continue  # Don't check until system is activated
+            continue
         
         current_time = time.time()
         any_disconnected = False
+        any_reconnected = False
         disconnected_modules = []
+        reconnected_modules = []
         
         for module, last_seen in module_last_seen.items():
             if last_seen == 0:
-                continue  # Module never connected
+                continue
             
             time_since_last_seen = current_time - last_seen
+            was_connected = modules_connected[module]
             
+            # Check if disconnected
             if time_since_last_seen > HEARTBEAT_TIMEOUT:
-                if modules_connected[module]:
+                if was_connected:
                     print(f"\n WARNING: {module.upper()} MODULE DISCONNECTED!")
                     print(f"  Last seen: {time_since_last_seen:.1f} seconds ago")
                     modules_connected[module] = False
                     any_disconnected = True
                     disconnected_modules.append(module)
+            
+            # CHECK IF RECONNECTED - THIS IS THE FIX
+            else:
+                if not was_connected:
+                    print(f"\n RECONNECTED: {module.upper()} MODULE BACK ONLINE!")
+                    print(f"  Last seen: {time_since_last_seen:.1f} seconds ago")
+                    modules_connected[module] = True
+                    any_reconnected = True
+                    reconnected_modules.append(module)
         
-        # If any module disconnected, pause the games
+        # Pause games if any module disconnected
         if any_disconnected and not games_paused:
-            print(f"\n PAUSING GAMES - Disconnected modules: {', '.join([m.upper() for m in disconnected_modules])}")
+            print(f"\n PAUSING GAMES - Disconnected: {', '.join([m.upper() for m in disconnected_modules])}")
             pause_all_games(client)
             games_paused = True
         
-        # If all reconnected, resume the games
-        elif not any_disconnected and games_paused:
-            # Check if all modules that were initially connected are back
+        # Resume games if all reconnected
+        if any_reconnected and games_paused:
             all_reconnected = all(modules_connected.values())
             if all_reconnected:
                 print(f"\n ALL MODULES RECONNECTED - RESUMING GAMES")
+                print(f"  Reconnected: {', '.join([m.upper() for m in reconnected_modules])}")
                 resume_all_games(client)
                 games_paused = False
+            else:
+                print(f"  {', '.join([m.upper() for m in reconnected_modules])} reconnected, still waiting for others...")
 
 def pause_all_games(client):
     """Pause all games due to disconnection"""
@@ -567,8 +582,12 @@ def pause_all_games(client):
         "reason": "module_disconnected"
     }
     
-    client.publish("rpi/to/esp2", json.dumps(pause_command))
-    print("Timer paused due to disconnection")
+    # Send pause to ALL modules, not just display
+    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+    for topic in topics:
+        client.publish(topic, json.dumps(pause_command))
+    
+    print("All games and timer paused due to disconnection")
 
 def resume_all_games(client):
     """Resume all games after reconnection"""
@@ -578,8 +597,12 @@ def resume_all_games(client):
         "reason": "module_reconnected"
     }
     
-    client.publish("rpi/to/esp2", json.dumps(resume_command))
-    print("Timer resumed after reconnection")
+    # Send resume to ALL modules
+    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+    for topic in topics:
+        client.publish(topic, json.dumps(resume_command))
+    
+    print("All games and timer resumed after reconnection")
 
 def main():
     client = mqtt.Client()

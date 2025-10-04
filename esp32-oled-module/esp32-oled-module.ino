@@ -234,10 +234,6 @@ void processMQTTMessage(String message) {
       Serial.printf("🚀 Starting timer for %d seconds\n", duration);
       startCountdown(duration);
     }
-      else if (type == "RESUME_TIMER" || command == "RESUME_TIMER") {
-        int remaining_time = duration;  // This line was causing the error
-        startCountdown(remaining_time);
-    }
     else if (type == "PAUSE_TIMER" || command == "PAUSE_TIMER") {
       Serial.println("⏹️ Stopping timer via MQTT");
       stopCountdown();
