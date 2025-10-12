@@ -2,6 +2,7 @@ import paho.mqtt.client as mqtt
 import json
 import os
 import time
+import threading
 
 # Track completion status of all games
 wire_game_completed = False
@@ -24,12 +25,26 @@ module_last_seen = {
     "button": 0
 }
 
+# Track missed heartbeats
+module_missed_heartbeats = {
+    "wire": 0,
+    "display": 0,
+    "maze": 0,
+    "button": 0
+}
+
 # Track if activation has been sent
 activation_sent = False
-games_paused = False  # Track if games are paused due to disconnect
+games_paused = False
 
 BROKER = "192.168.1.201"
 CONFIG_FILE = "config.json"
+
+# Heartbeat settings
+HEARTBEAT_INTERVAL = 3  # ESP32s send every 3 seconds
+HEARTBEAT_TIMEOUT = 8   # Consider missed if not received within 8 seconds
+MAX_MISSED_HEARTBEATS = 2  # Disconnect after 2 missed (16 seconds total)
+HEARTBEAT_CHECK_INTERVAL = 2  # Check every 2 seconds
 
 def create_default_config():
     """Create a default config file if it doesn't exist"""
@@ -112,7 +127,7 @@ def check_all_modules_connected(client):
             "type": "ACTIVATE",
             "command": "ACTIVATE",
             "message": "All modules connected - system activated!",
-            "duration": game_duration,  # Include timer duration in activation
+            "duration": game_duration,
             "timestamp": int(time.time() * 1000)
         }
         
@@ -128,13 +143,12 @@ def check_all_modules_connected(client):
             result = client.publish(topic, json.dumps(activation_command))
             print(f"  SENT ACTIVATION to {module_name} ({topic})")
             print(f"    Result: {'SUCCESS' if result.rc == mqtt.MQTT_ERR_SUCCESS else 'FAILED'}")
-            time.sleep(0.1)  # Small delay between messages
+            time.sleep(0.1)
         
         activation_sent = True
         print(f"\nALL ACTIVATION SIGNALS SENT WITH {game_duration}s TIMER!\n")
         return True
     elif all_connected and activation_sent:
-        print("All modules connected and already activated")
         return True
     else:
         missing_modules = [module for module, connected in modules_connected.items() if not connected]
@@ -175,12 +189,12 @@ def on_connect(client, userdata, flags, rc):
     
     # Subscribe to all topics
     topics = [
-        ("esp/to/rpi", 0),      # Wire module
-        ("esp2/to/rpi", 0),     # Display module
-        ("esp3/to/rpi", 0),     # Maze module
-        ("esp4/to/rpi", 0),     # Button module
-        ("config/request", 0),  # Config requests
-        ("config/update", 0)    # Config updates
+        ("esp/to/rpi", 0),
+        ("esp2/to/rpi", 0),
+        ("esp3/to/rpi", 0),
+        ("esp4/to/rpi", 0),
+        ("config/request", 0),
+        ("config/update", 0)
     ]
     
     for topic, qos in topics:
@@ -194,7 +208,6 @@ def on_connect(client, userdata, flags, rc):
     print("-" * 50)
     
     # Start heartbeat checker thread
-    import threading
     heartbeat_thread = threading.Thread(target=check_heartbeats, args=(client,), daemon=True)
     heartbeat_thread.start()
 
@@ -216,7 +229,15 @@ def on_message(client, userdata, msg):
     elif topic == "esp4/to/rpi":
         module_last_seen["button"] = current_time
     
-    # Debug: Print all received messages
+    # Don't print heartbeats to reduce spam
+    try:
+        data = json.loads(message_payload)
+        if isinstance(data, dict) and data.get("type") == "HEARTBEAT":
+            return  # Silently handle heartbeat
+    except:
+        pass
+    
+    # Debug: Print non-heartbeat messages
     print(f"\n[RAW] Topic: {topic}")
     print(f"[RAW] Payload: {message_payload}")
    
@@ -257,42 +278,35 @@ def on_message(client, userdata, msg):
         return
    
     try:
-        # Try parsing as JSON
         data = json.loads(message_payload)
         
-        # Check if data is a dictionary (not int, string, etc.)
         if not isinstance(data, dict):
             print(f"[PARSED] Non-dict JSON: {data} (type: {type(data).__name__})")
             return
         
         msg_type = data.get("type", "")
-        
         print(f"[PARSED] Type: {msg_type}")
         
         # === CONNECTION STATUS HANDLING ===
-        # This is the KEY FIX - handle connection messages regardless of topic
-        
-        if msg_type == "HEARTBEAT":
-            # Silently handle heartbeat - already updated module_last_seen above
-            # Don't print anything to avoid spam
-            pass
-        
-        elif msg_type == "DISPLAY_CONNECTED":
+        if msg_type == "DISPLAY_CONNECTED":
             print("\nDISPLAY MODULE CONNECTED!")
             print(f"  Device: {data.get('device', 'Unknown')}")
             modules_connected["display"] = True
+            module_missed_heartbeats["display"] = 0
             check_all_modules_connected(client)
             
         elif msg_type == "WIRE_MODULE_CONNECTED":
             print("\nWIRE MODULE CONNECTED!")
             print(f"  Device: {data.get('device', 'Unknown')}")
             modules_connected["wire"] = True
+            module_missed_heartbeats["wire"] = 0
             check_all_modules_connected(client)
             
         elif msg_type == "MAZE_MODULE_CONNECTED":
             print("\nMAZE MODULE CONNECTED!")
             print(f"  Device: {data.get('device', 'Unknown')}")
             modules_connected["maze"] = True
+            module_missed_heartbeats["maze"] = 0
             check_all_modules_connected(client)
             
         elif msg_type == "BUTTON_MODULE_CONNECTED":
@@ -300,6 +314,7 @@ def on_message(client, userdata, msg):
             print(f"  Device: {data.get('device', 'Unknown')}")
             print(f"  Target time: {data.get('target_time', 2000)}ms")
             modules_connected["button"] = True
+            module_missed_heartbeats["button"] = 0
             check_all_modules_connected(client)
         
         # === ACTIVATION ACKNOWLEDGMENT ===
@@ -309,6 +324,13 @@ def on_message(client, userdata, msg):
         elif msg_type == "MODULE_ACTIVATED":
             module_name = data.get('device', 'Unknown')
             print(f"{module_name} activated and ready")
+        
+        # === RECONNECTION ACKNOWLEDGMENTS ===
+        elif msg_type in ["WIRE_GAME_PAUSED", "MAZE_PAUSED", "TIMER_PAUSED"]:
+            print(f"{msg_type}: {data.get('message', '')}")
+            
+        elif msg_type in ["WIRE_GAME_RESUMED", "MAZE_RESUMED", "TIMER_RESUMED"]:
+            print(f"{msg_type}: {data.get('message', '')}")
         
         # === GAME EVENT HANDLING ===
         elif msg_type == "TIMER_FINISHED":
@@ -321,7 +343,6 @@ def on_message(client, userdata, msg):
         elif msg_type == "MAX_X_REACHED":
             print("MAXIMUM X COUNT REACHED - GAME OVER!")
             print(f"X Count: {data.get('x_count', 0)}/{data.get('max_x_count', 3)}")
-            # Trigger game over when max X is reached
             handle_timer_finished(client)
            
         elif msg_type == "TIMER_STARTED":
@@ -369,15 +390,11 @@ def on_message(client, userdata, msg):
             print(f"  Target time: {data.get('target_time', 0)}ms")
             print(f"  Difference: {data.get('difference', 0)}ms")
             send_x_to_display(client, "BUTTON_GAME_LOST")
-        
-        else:
-            print(f"Unknown message type: {msg_type}")
            
     except json.JSONDecodeError as e:
         print(f"JSON decode error: {e}")
         print(f"Raw message: '{message_payload}'")
         
-        # Handle non-JSON messages
         message = message_payload.strip()
         if message == "1":
             print("Received '1' signal from ESP32")
@@ -428,6 +445,119 @@ def check_all_games_completed(client):
             client.publish(topic, json.dumps(victory_message))
            
         print("Victory signals sent to all ESP32s!")
+
+def pause_all_games(client):
+    """Pause all games due to disconnection"""
+    pause_command = {
+        "type": "PAUSE_TIMER",
+        "command": "PAUSE_TIMER",
+        "reason": "module_disconnected"
+    }
+    
+    # Send pause to ALL modules
+    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+    for topic in topics:
+        client.publish(topic, json.dumps(pause_command))
+        time.sleep(0.05)  # Small delay between messages
+    
+    print("All games and timer paused due to disconnection")
+
+def resume_all_games(client):
+    """Resume all games after reconnection"""
+    resume_command = {
+        "type": "RESUME_TIMER",
+        "command": "RESUME_TIMER",
+        "reason": "module_reconnected"
+    }
+    
+    # Send resume to ALL modules
+    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
+    for topic in topics:
+        client.publish(topic, json.dumps(resume_command))
+        time.sleep(0.05)  # Small delay between messages
+    
+    print("All games and timer resumed after reconnection")
+
+def check_heartbeats(client):
+    """Check if modules are still connected via heartbeat timeout"""
+    global modules_connected, module_last_seen, activation_sent, games_paused, module_missed_heartbeats
+    
+    print(f"\nHeartbeat monitor started:")
+    print(f"  - Checking every {HEARTBEAT_CHECK_INTERVAL}s")
+    print(f"  - Timeout after {HEARTBEAT_TIMEOUT}s of no heartbeat")
+    print(f"  - Disconnect after {MAX_MISSED_HEARTBEATS} missed heartbeats ({HEARTBEAT_TIMEOUT * MAX_MISSED_HEARTBEATS}s total)\n")
+    
+    while True:
+        time.sleep(HEARTBEAT_CHECK_INTERVAL)
+        
+        if not activation_sent:
+            continue  # Don't check until system is activated
+        
+        current_time = time.time()
+        any_disconnected = False
+        any_reconnected = False
+        disconnected_modules = []
+        reconnected_modules = []
+        
+        for module, last_seen in module_last_seen.items():
+            if last_seen == 0:
+                continue  # Module never connected
+            
+            time_since_last_seen = current_time - last_seen
+            was_connected = modules_connected[module]
+            
+            # Check if heartbeat timeout exceeded
+            if time_since_last_seen > HEARTBEAT_TIMEOUT:
+                # Increment missed heartbeat counter
+                if module_missed_heartbeats[module] < MAX_MISSED_HEARTBEATS:
+                    module_missed_heartbeats[module] += 1
+                    if module_missed_heartbeats[module] == 1:
+                        print(f"⚠️  {module.upper()}: Heartbeat timeout ({time_since_last_seen:.1f}s) - Warning {module_missed_heartbeats[module]}/{MAX_MISSED_HEARTBEATS}")
+                
+                # Disconnect only after multiple missed heartbeats
+                if module_missed_heartbeats[module] >= MAX_MISSED_HEARTBEATS and was_connected:
+                    print(f"\n🔴 {module.upper()} MODULE DISCONNECTED!")
+                    print(f"   Last seen: {time_since_last_seen:.1f} seconds ago")
+                    print(f"   Missed {module_missed_heartbeats[module]} consecutive heartbeats")
+                    modules_connected[module] = False
+                    any_disconnected = True
+                    disconnected_modules.append(module)
+            
+            # Heartbeat received within timeout - check for reconnection
+            else:
+                # Reset missed heartbeat counter
+                if module_missed_heartbeats[module] > 0:
+                    if module_missed_heartbeats[module] < MAX_MISSED_HEARTBEATS:
+                        print(f"✅ {module.upper()}: Heartbeat recovered")
+                    module_missed_heartbeats[module] = 0
+                
+                # Module reconnected
+                if not was_connected:
+                    print(f"\n🟢 {module.upper()} MODULE RECONNECTED!")
+                    print(f"   Last seen: {time_since_last_seen:.1f} seconds ago")
+                    modules_connected[module] = True
+                    any_reconnected = True
+                    reconnected_modules.append(module)
+        
+        # Pause games if any module disconnected
+        if any_disconnected and not games_paused:
+            print(f"\n⏸️  PAUSING ALL GAMES")
+            print(f"   Disconnected: {', '.join([m.upper() for m in disconnected_modules])}")
+            pause_all_games(client)
+            games_paused = True
+        
+        # Resume games if all reconnected
+        if any_reconnected and games_paused:
+            all_reconnected = all(modules_connected.values())
+            if all_reconnected:
+                print(f"\n▶️  ALL MODULES RECONNECTED - RESUMING GAMES")
+                print(f"   Reconnected: {', '.join([m.upper() for m in reconnected_modules])}")
+                resume_all_games(client)
+                games_paused = False
+            else:
+                still_missing = [m for m, connected in modules_connected.items() if not connected]
+                print(f"   {', '.join([m.upper() for m in reconnected_modules])} back online")
+                print(f"   Still waiting for: {', '.join([m.upper() for m in still_missing])}")
 
 def start_all_games(client):
     """Start all games simultaneously"""
@@ -492,15 +622,19 @@ def stop_all_games(client):
 def reset_all_games(client):
     """Reset all games to initial state"""
     global wire_game_completed, maze_game_completed, button_game_completed
-    global activation_sent, games_paused
+    global activation_sent, games_paused, module_missed_heartbeats
    
     print("\nResetting all games...")
    
     wire_game_completed = False
     maze_game_completed = False
     button_game_completed = False
-    activation_sent = False  # Allow reactivation
-    games_paused = False  # Reset pause state
+    activation_sent = False
+    games_paused = False
+    
+    # Reset missed heartbeat counters
+    for module in module_missed_heartbeats:
+        module_missed_heartbeats[module] = 0
    
     reset_commands = {
         "rpi/to/esp": {"type": "RESET_GAME", "command": "RESET_GAME"},
@@ -513,96 +647,6 @@ def reset_all_games(client):
         client.publish(topic, json.dumps(command))
        
     print("All games reset!")
-
-def check_heartbeats(client):
-    """Check if modules are still connected via heartbeat timeout"""
-    global modules_connected, module_last_seen, activation_sent, games_paused
-    
-    HEARTBEAT_TIMEOUT = 20  # seconds
-    
-    while True:
-        time.sleep(2)
-        
-        if not activation_sent:
-            continue
-        
-        current_time = time.time()
-        any_disconnected = False
-        any_reconnected = False
-        disconnected_modules = []
-        reconnected_modules = []
-        
-        for module, last_seen in module_last_seen.items():
-            if last_seen == 0:
-                continue
-            
-            time_since_last_seen = current_time - last_seen
-            was_connected = modules_connected[module]
-            
-            # Check if disconnected
-            if time_since_last_seen > HEARTBEAT_TIMEOUT:
-                if was_connected:
-                    print(f"\n WARNING: {module.upper()} MODULE DISCONNECTED!")
-                    print(f"  Last seen: {time_since_last_seen:.1f} seconds ago")
-                    modules_connected[module] = False
-                    any_disconnected = True
-                    disconnected_modules.append(module)
-            
-            # CHECK IF RECONNECTED - THIS IS THE FIX
-            else:
-                if not was_connected:
-                    print(f"\n RECONNECTED: {module.upper()} MODULE BACK ONLINE!")
-                    print(f"  Last seen: {time_since_last_seen:.1f} seconds ago")
-                    modules_connected[module] = True
-                    any_reconnected = True
-                    reconnected_modules.append(module)
-        
-        # Pause games if any module disconnected
-        if any_disconnected and not games_paused:
-            print(f"\n PAUSING GAMES - Disconnected: {', '.join([m.upper() for m in disconnected_modules])}")
-            pause_all_games(client)
-            games_paused = True
-        
-        # Resume games if all reconnected
-        if any_reconnected and games_paused:
-            all_reconnected = all(modules_connected.values())
-            if all_reconnected:
-                print(f"\n ALL MODULES RECONNECTED - RESUMING GAMES")
-                print(f"  Reconnected: {', '.join([m.upper() for m in reconnected_modules])}")
-                resume_all_games(client)
-                games_paused = False
-            else:
-                print(f"  {', '.join([m.upper() for m in reconnected_modules])} reconnected, still waiting for others...")
-
-def pause_all_games(client):
-    """Pause all games due to disconnection"""
-    pause_command = {
-        "type": "PAUSE_TIMER",
-        "command": "PAUSE_TIMER",
-        "reason": "module_disconnected"
-    }
-    
-    # Send pause to ALL modules, not just display
-    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
-    for topic in topics:
-        client.publish(topic, json.dumps(pause_command))
-    
-    print("All games and timer paused due to disconnection")
-
-def resume_all_games(client):
-    """Resume all games after reconnection"""
-    resume_command = {
-        "type": "RESUME_TIMER",
-        "command": "RESUME_TIMER",
-        "reason": "module_reconnected"
-    }
-    
-    # Send resume to ALL modules
-    topics = ["rpi/to/esp", "rpi/to/esp2", "rpi/to/esp3", "rpi/to/esp4"]
-    for topic in topics:
-        client.publish(topic, json.dumps(resume_command))
-    
-    print("All games and timer resumed after reconnection")
 
 def main():
     client = mqtt.Client()
