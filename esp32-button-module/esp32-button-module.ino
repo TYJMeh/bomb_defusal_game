@@ -162,32 +162,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-// Add WiFi reconnection to loop():
-void loop() {
-// Check WiFi connection first
-if (WiFi.status() != WL_CONNECTED) {
-  Serial.println("WiFi disconnected! Reconnecting...");
-  WiFi.disconnect();
-  WiFi.begin(ssid, password);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi reconnected!");
-  }
-}
-
-if (!client.connected()) {
-  reconnect();
-}
-client.loop();
-
-// Rest of your existing code...
-}
-
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
@@ -301,7 +275,7 @@ void loop() {
   
   // Maintain MQTT connection
   if (!client.connected()) {
-    reconnectMQTT();
+    reconnect();
   }
   client.loop();
 
