@@ -1,36 +1,262 @@
-{
-    "timer_settings": {
-        "game_duration": 69,
-        "warning_time": 60,
-        "countdown_start": 10,
-        "auto_reset": true,
-        "difficulty_level": "medium"
-    },
-    "game_settings": {
-        "simultaneous_start": true,
-        "require_all_connected": true,
-        "emergency_stop_on_disconnect": true
-    },
-    "button_settings": {
-        "button_1": {
-            "target_time": 2000,
-            "buffer": 500,
-            "enabled": true
-        },
-        "button_2": {
-            "target_time": 2500,
-            "buffer": 500,
-            "enabled": false
-        },
-        "button_3": {
-            "target_time": 3000,
-            "buffer": 500,
-            "enabled": false
+import json
+import os
+import shutil
+from datetime import datetime
+
+class GameConfigManager:
+    def __init__(self, config_file="config.json"):
+        self.config_file = config_file
+        self.config = self.load_config()
+    
+    def load_config(self):
+        """Load configuration from JSON file"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                print(f"✓ Configuration loaded from {self.config_file}")
+                return config
+            except json.JSONDecodeError as e:
+                print(f"Error reading config file: {e}")
+                print("Creating backup and using default config...")
+                self.create_backup()
+                return self.create_default_config()
+        else:
+            print(f"Config file not found. Creating default...")
+            return self.create_default_config()
+    
+    def create_default_config(self):
+        """Create default configuration matching your structure"""
+        default_config = {
+            "timer_settings": {
+                "game_duration": 300,
+                "warning_time": 60,
+                "countdown_start": 10,
+                "auto_reset": True,
+                "difficulty_level": "medium"
+            },
+            "game_settings": {
+                "simultaneous_start": True,
+                "require_all_connected": True,
+                "emergency_stop_on_disconnect": True
+            },
+            "button_settings": {
+                "button_1": {
+                    "target_time": 2000,
+                    "buffer": 500
+                },
+                "button_2": {
+                    "target_time": 2500,
+                    "buffer": 500
+                },
+                "button_3": {
+                    "target_time": 3000,
+                    "buffer": 500
+                }
+            }
         }
-    }
+        self.save_config(default_config)
+        return default_config
+    
+    def save_config(self, config=None):
+        """Save configuration to JSON file"""
+        if config is None:
+            config = self.config
+        
+        # Create backup before saving
+        self.create_backup()
+        
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=4)
+            self.config = config
+            print(f"✓ Configuration saved to {self.config_file}")
+            return True
+        except Exception as e:
+            print(f"Error saving config: {e}")
+            return False
+    
+    def create_backup(self):
+        """Create backup of config file"""
+        if os.path.exists(self.config_file):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_file = f"{self.config_file}.backup_{timestamp}"
+            try:
+                shutil.copy(self.config_file, backup_file)
+                print(f"  Backup created: {backup_file}")
+            except Exception as e:
+                print(f"  Warning: Could not create backup: {e}")
+    
+    def get_active_button(self):
+        """Get the first enabled button configuration"""
+        button_settings = self.config.get("button_settings", {})
+        
+        # Check each button in order
+        for button_id in ["button_1", "button_2", "button_3"]:
+            if button_id in button_settings:
+                # If button exists in config, it's considered active
+                return button_id, button_settings[button_id]
+        
+        # Default to button_1 if nothing found
+        return "button_1", {"target_time": 2000, "buffer": 500}
+    
+    def get_button_config(self, button_id):
+        """Get specific button configuration"""
+        button_settings = self.config.get("button_settings", {})
+        
+        if button_id in button_settings:
+            config = button_settings[button_id]
+            print(f"Button {button_id} config:")
+            print(f"  Target time: {config.get('target_time', 2000)}ms")
+            print(f"  Buffer: ±{config.get('buffer', 500)}ms")
+            return config
+        else:
+            print(f"Button {button_id} not found in config")
+            return {"target_time": 2000, "buffer": 500}
+    
+    def set_active_button(self, button_id):
+        """Set which button configuration to use"""
+        if button_id not in self.config.get("button_settings", {}):
+            print(f"Error: {button_id} does not exist in configuration")
+            return False
+        
+        print(f"Active button set to: {button_id}")
+        config = self.get_button_config(button_id)
+        return True
+    
+    def update_button_config(self, button_id, target_time=None, buffer=None):
+        """Update a button's configuration"""
+        if "button_settings" not in self.config:
+            self.config["button_settings"] = {}
+        
+        if button_id not in self.config["button_settings"]:
+            self.config["button_settings"][button_id] = {}
+        
+        if target_time is not None:
+            self.config["button_settings"][button_id]["target_time"] = target_time
+            print(f"  {button_id} target_time updated to {target_time}ms")
+        
+        if buffer is not None:
+            self.config["button_settings"][button_id]["buffer"] = buffer
+            print(f"  {button_id} buffer updated to ±{buffer}ms")
+        
+        self.save_config()
+        return True
+    
+    def get_timer_duration(self):
+        """Get game timer duration"""
+        return self.config.get("timer_settings", {}).get("game_duration", 300)
+    
+    def set_timer_duration(self, seconds):
+        """Set game timer duration"""
+        if "timer_settings" not in self.config:
+            self.config["timer_settings"] = {}
+        
+        self.config["timer_settings"]["game_duration"] = seconds
+        self.save_config()
+        print(f"Timer duration set to {seconds} seconds")
+    
+    def print_config(self):
+        """Print current configuration"""
+        print("\n" + "="*60)
+        print("CURRENT CONFIGURATION")
+        print("="*60)
+        
+        # Timer Settings
+        print("\nTimer Settings:")
+        timer = self.config.get("timer_settings", {})
+        print(f"  Game Duration: {timer.get('game_duration', 300)} seconds")
+        print(f"  Warning Time: {timer.get('warning_time', 60)} seconds")
+        print(f"  Countdown Start: {timer.get('countdown_start', 10)} seconds")
+        print(f"  Auto Reset: {timer.get('auto_reset', True)}")
+        print(f"  Difficulty: {timer.get('difficulty_level', 'medium')}")
+        
+        # Game Settings
+        print("\nGame Settings:")
+        game = self.config.get("game_settings", {})
+        print(f"  Simultaneous Start: {game.get('simultaneous_start', True)}")
+        print(f"  Require All Connected: {game.get('require_all_connected', True)}")
+        print(f"  Emergency Stop on Disconnect: {game.get('emergency_stop_on_disconnect', True)}")
+        
+        # Button Settings
+        print("\nButton Configurations:")
+        buttons = self.config.get("button_settings", {})
+        for button_id in ["button_1", "button_2", "button_3"]:
+            if button_id in buttons:
+                btn = buttons[button_id]
+                print(f"  {button_id}:")
+                print(f"    Target Time: {btn.get('target_time', 0)}ms")
+                print(f"    Buffer: ±{btn.get('buffer', 0)}ms")
+                print(f"    Range: {btn.get('target_time', 0) - btn.get('buffer', 0)}ms - {btn.get('target_time', 0) + btn.get('buffer', 0)}ms")
+        
+        print("="*60 + "\n")
+    
+    def get_full_config(self):
+        """Return the full configuration dictionary"""
+        return self.config
+    
+    def reload_config(self):
+        """Reload configuration from file"""
+        print("Reloading configuration from file...")
+        self.config = self.load_config()
+        return self.config
 
 
-
-
-
-}
+# Example usage and testing
+if __name__ == "__main__":
+    # Create config manager
+    config = GameConfigManager("config.json")
+    
+    # Print current config
+    config.print_config()
+    
+    # Get active button
+    active_button_id, active_config = config.get_active_button()
+    print(f"\nActive Button: {active_button_id}")
+    print(f"  Target: {active_config['target_time']}ms ± {active_config['buffer']}ms")
+    
+    # Test button config retrieval
+    print("\n--- Testing Button Config Retrieval ---")
+    config.get_button_config("button_1")
+    config.get_button_config("button_2")
+    config.get_button_config("button_3")
+    
+    # Test updating button config
+    print("\n--- Testing Config Update ---")
+    config.update_button_config("button_2", target_time=2800, buffer=600)
+    
+    # Test setting timer duration
+    print("\n--- Testing Timer Update ---")
+    config.set_timer_duration(420)
+    
+    # Print updated config
+    config.print_config()
+    
+    # Available functions for external use:
+    print("\n" + "="*60)
+    print("AVAILABLE FUNCTIONS")
+    print("="*60)
+    print("config.get_active_button()")
+    print("  → Returns: (button_id, button_config_dict)")
+    print()
+    print("config.get_button_config(button_id)")
+    print("  → Returns: button_config_dict")
+    print()
+    print("config.set_active_button(button_id)")
+    print("  → Sets which button to use")
+    print()
+    print("config.update_button_config(button_id, target_time, buffer)")
+    print("  → Updates button configuration")
+    print()
+    print("config.get_timer_duration()")
+    print("  → Returns: game duration in seconds")
+    print()
+    print("config.set_timer_duration(seconds)")
+    print("  → Sets game timer duration")
+    print()
+    print("config.print_config()")
+    print("  → Prints full configuration")
+    print()
+    print("config.reload_config()")
+    print("  → Reloads config from file")
+    print("="*60)
