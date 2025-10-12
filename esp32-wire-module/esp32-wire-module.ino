@@ -139,6 +139,21 @@ void sendHeartbeat() {
 }
 
 void loop() {
+  // Check WiFi connection first
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected! Reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi reconnected!");
+    }
+  }
   // Maintain MQTT connection
   if (!client.connected()) {
     reconnectMQTT();
@@ -160,6 +175,10 @@ void loop() {
   if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
     sendHeartbeat();
     lastHeartbeat = millis();
+  }
+
+  if (!client.connected()) {
+    reconnect();
   }
 
   delay(10);  // Small delay for stability
@@ -381,12 +400,14 @@ void handleSerialCommands() {
       game_active = false;
       Serial.println("⏸️ Wire game paused");
       sendToRaspberryPi("WIRE_GAME_PAUSED", "Wire game paused");
-    }
-    else if (command == "RESUME_TIMER") {
-      game_active = true;
-      Serial.println("▶️ Wire game resumed");
-      sendToRaspberryPi("WIRE_GAME_RESUMED", "Wire game resumed");
-    }
+  }
+  else if (command == "RESUME_TIMER") {
+      if (!game_completed) {
+          game_active = true;
+          Serial.println("▶️ Wire game resumed");
+          sendToRaspberryPi("WIRE_GAME_RESUMED", "Wire game resumed");
+      }
+  }
     else {
       Serial.println("Unknown command. Type HELP for available commands.");
     }

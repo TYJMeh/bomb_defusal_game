@@ -120,26 +120,34 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   else if (command == "PAUSE_TIMER") {
     gameActive = false;
-    Serial.println("⏸️ Button game paused");
+    Serial.println("⏸️ Maze game paused");
     
-    // Visual feedback - orange/yellow LEDs
-    fill_solid(leds, NUM_LEDS, CRGB(255, 165, 0));
-    FastLED.show();
-    delay(500);
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    FastLED.show();
-  }
-  else if (command == "RESUME_TIMER") {
-    gameActive = true;
-    Serial.println("▶️ Button game resumed");
+    StaticJsonDocument<200> doc;
+    doc["type"] = "MAZE_PAUSED";
+    doc["message"] = "Maze game paused";
+    doc["device"] = "ESP32_Maze";
+    doc["timestamp"] = millis();
     
-    // Visual feedback - green flash
-    fill_solid(leds, NUM_LEDS, CRGB::Green);
-    FastLED.show();
-    delay(500);
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    FastLED.show();
-  }
+    String jsonString;
+    serializeJson(doc, jsonString);
+    client.publish(publish_topic, jsonString.c_str());
+}
+else if (command == "RESUME_TIMER") {
+    if (!gameWon) {
+        gameActive = true;
+        Serial.println("▶️ Maze game resumed");
+        
+        StaticJsonDocument<200> doc;
+        doc["type"] = "MAZE_RESUMED";
+        doc["message"] = "Maze game resumed";
+        doc["device"] = "ESP32_Maze";
+        doc["timestamp"] = millis();
+        
+        String jsonString;
+        serializeJson(doc, jsonString);
+        client.publish(publish_topic, jsonString.c_str());
+    }
+}
 }
 
 void reconnect() {
@@ -237,6 +245,23 @@ void sendHeartbeat() {
 }
 
 void loop() {
+  // Check WiFi connection first
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected! Reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi reconnected!");
+    }
+  }
+  
+  // Maintain MQTT connection
   if (!client.connected()) {
     reconnect();
   }
