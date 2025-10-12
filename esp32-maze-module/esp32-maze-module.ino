@@ -131,7 +131,7 @@ void loop() {
   }
   
   if (!client.connected()) {
-    reconnect();
+    reconnectMQTT();
   }
   client.loop();
   
