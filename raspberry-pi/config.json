@@ -11,7 +11,7 @@
         "require_all_connected": true,
         "emergency_stop_on_disconnect": true
     },
-    "button_settings": {
+    "button_ID": {
         "button_1": {
             "target_time": 2000,
             "buffer": 500,
