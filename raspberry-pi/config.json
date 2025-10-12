@@ -43,17 +43,49 @@
         }
     },
     "wire_ID": {
-        "wire_1": {
-            "enabled": true
+        "puzzle_1": {
+            "enabled": true,
+            "total_steps": 1,
+            "puzzle_sequence": [
+                {
+                    "instruction": "Cut the RED wire",
+                    "correct_wire": 0,
+                    "success_message": "Correct!"
+                }
+            ]
         },
-        "wire_2": {
-            "enabled": false
+        "puzzle_2": {
+            "enabled": false,
+            "total_steps": 1,
+            "puzzle_sequence": [
+                {
+                    "instruction": "Cut the BLUE wire",
+                    "correct_wire": 1,
+                    "success_message": "Correct!"
+                }
+            ]
         },
-        "wire_3": {
-            "enabled": false
+        "puzzle_3": {
+            "enabled": false,
+            "total_steps": 1,
+            "puzzle_sequence": [
+                {
+                    "instruction": "Cut the GREEN wire",
+                    "correct_wire": 2,
+                    "success_message": "Correct!"
+                }
+            ]
         },
-        "wire_4": {
-            "enabled": false
+        "puzzle_4": {
+            "enabled": false,
+            "total_steps": 1,
+            "puzzle_sequence": [
+                {
+                    "instruction": "Cut the YELLOW wire",
+                    "correct_wire": 3,
+                    "success_message": "Correct!"
+                }
+            ]
         }
     }
 

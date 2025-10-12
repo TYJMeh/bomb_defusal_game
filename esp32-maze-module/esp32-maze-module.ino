@@ -32,20 +32,13 @@ const char* publish_topic = "esp3/to/rpi";
 #define MAZE_HEIGHT 8
 #define CELL_SIZE 8
 
-// Checkpoint positions (must be reached in order)
-struct Checkpoint {
-  int x;
-  int y;
-  bool reached;
-  String name;
-};
+// Mid circle position
+int midX = 4;
+int midY = 3;
 
-Checkpoint checkpoints[] = {
-  {4, 3, false, "Checkpoint 1"},
-  {9, 3, false, "Checkpoint 2"}
-};
-int numCheckpoints = 2;
-int currentCheckpoint = 0;
+// Mid circle 2 position
+int midX2 = 9;
+int midY2 = 3;
 
 // Player position
 int playerX = 1;
@@ -93,19 +86,16 @@ void setup() {
   display.display();
   
   Serial.println("Maze Game Started!");
-  Serial.println("Navigate through checkpoints to reach the end!");
 }
 
 void sendHeartbeat() {
   if (client.connected() && waiting == 1) {
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<128> doc;
     doc["type"] = "HEARTBEAT";
     doc["device"] = "ESP32_Maze";
     doc["timestamp"] = millis();
     doc["game_active"] = gameActive;
     doc["game_won"] = gameWon;
-    doc["current_checkpoint"] = currentCheckpoint;
-    doc["total_checkpoints"] = numCheckpoints;
     
     String json_string;
     serializeJson(doc, json_string);
@@ -153,6 +143,12 @@ void loop() {
     lastHeartbeat = millis();
   }
 
+  int xValue = analogRead(JOY_X_PIN);
+  int yValue = analogRead(JOY_Y_PIN);
+
+  Serial.println(xValue);
+  Serial.println(yValue);
+
   delay(50);
 }
 
@@ -187,21 +183,14 @@ void handleInput() {
   if (newX != playerX || newY != playerY) {
     if (newX >= 0 && newX < MAZE_WIDTH && newY >= 0 && newY < MAZE_HEIGHT) {
       if (maze[newY][newX] == 1) {
-        // Hit a wall - reset to start
+        // Hit a wall - reset to start position
         playerX = 1;
         playerY = 1;
+        Serial.println("Hit wall! Returning to start.");
         
-        // Reset all checkpoints
-        for (int i = 0; i < numCheckpoints; i++) {
-          checkpoints[i].reached = false;
-        }
-        currentCheckpoint = 0;
-        
-        Serial.println("Hit wall! Returning to start. Checkpoints reset.");
-        
-        StaticJsonDocument<256> doc;
+        StaticJsonDocument<200> doc;
         doc["type"] = "WALL_HIT";
-        doc["message"] = "Player hit wall, returned to start, checkpoints reset";
+        doc["message"] = "Player hit wall and returned to start";
         doc["device"] = "ESP32_Maze";
         doc["timestamp"] = millis();
         
@@ -214,78 +203,21 @@ void handleInput() {
         playerX = newX;
         playerY = newY;
         
-        // Check if reached current checkpoint
-        if (currentCheckpoint < numCheckpoints) {
-          Checkpoint* cp = &checkpoints[currentCheckpoint];
-          if (playerX == cp->x && playerY == cp->y && !cp->reached) {
-            cp->reached = true;
-            currentCheckpoint++;
-            
-            Serial.printf("✓ Reached %s! (%d/%d)\n", 
-                         cp->name.c_str(), 
-                         currentCheckpoint, 
-                         numCheckpoints);
-            
-            StaticJsonDocument<256> doc;
-            doc["type"] = "CHECKPOINT_REACHED";
-            doc["message"] = cp->name;
-            doc["checkpoint_number"] = currentCheckpoint;
-            doc["total_checkpoints"] = numCheckpoints;
-            doc["device"] = "ESP32_Maze";
-            doc["timestamp"] = millis();
-            
-            String jsonString;
-            serializeJson(doc, jsonString);
-            client.publish(publish_topic, jsonString.c_str());
-            
-            // Visual feedback
-            display.clearDisplay();
-            display.setTextSize(1);
-            display.setTextColor(SSD1306_WHITE);
-            display.setCursor(10, 25);
-            display.println(cp->name);
-            display.setCursor(30, 40);
-            display.printf("%d/%d", currentCheckpoint, numCheckpoints);
-            display.display();
-            delay(1000);
-          }
-        }
-        
-        // Check if reached the end (only after all checkpoints)
+        // Check if reached the end
         if (playerX == endX && playerY == endY) {
-          if (currentCheckpoint >= numCheckpoints) {
-            // All checkpoints reached - WIN!
-            gameWon = true;
-            Serial.println("🎉 YOU WIN! All checkpoints completed!");
-            
-            StaticJsonDocument<256> doc;
-            doc["type"] = "MAZE_COMPLETED";
-            doc["message"] = "Player completed maze with all checkpoints!";
-            doc["time"] = millis();
-            doc["device"] = "ESP32_Maze";
-            doc["checkpoints_completed"] = currentCheckpoint;
-            doc["timestamp"] = millis();
-            
-            String jsonString;
-            serializeJson(doc, jsonString);
-            client.publish(publish_topic, jsonString.c_str());
-          } else {
-            // Reached end without all checkpoints
-            Serial.printf("❌ Need to reach checkpoints first! (%d/%d completed)\n", 
-                         currentCheckpoint, numCheckpoints);
-            
-            StaticJsonDocument<256> doc;
-            doc["type"] = "INCOMPLETE_MAZE";
-            doc["message"] = "Reached end without all checkpoints";
-            doc["checkpoints_completed"] = currentCheckpoint;
-            doc["checkpoints_required"] = numCheckpoints;
-            doc["device"] = "ESP32_Maze";
-            doc["timestamp"] = millis();
-            
-            String jsonString;
-            serializeJson(doc, jsonString);
-            client.publish(publish_topic, jsonString.c_str());
-          }
+          gameWon = true;
+          Serial.println("You Win!");
+          
+          StaticJsonDocument<200> doc;
+          doc["type"] = "MAZE_COMPLETED";
+          doc["message"] = "Player completed the maze!";
+          doc["time"] = millis();
+          doc["device"] = "ESP32_Maze";
+          doc["timestamp"] = millis();
+          
+          String jsonString;
+          serializeJson(doc, jsonString);
+          client.publish(publish_topic, jsonString.c_str());
         }
       }
       
@@ -293,20 +225,14 @@ void handleInput() {
     }
   }
   
-  // Button press to restart
+  // Check button press to restart game
   if (digitalRead(JOY_BUTTON_PIN) == LOW) {
     if (gameWon) {
       gameWon = false;
       playerX = 1;
       playerY = 1;
       
-      // Reset checkpoints
-      for (int i = 0; i < numCheckpoints; i++) {
-        checkpoints[i].reached = false;
-      }
-      currentCheckpoint = 0;
-      
-      StaticJsonDocument<256> doc;
+      StaticJsonDocument<200> doc;
       doc["type"] = "GAME_RESTART";
       doc["message"] = "Maze game restarted";
       doc["device"] = "ESP32_Maze";
@@ -323,45 +249,34 @@ void handleInput() {
 void drawGame() {
   display.clearDisplay();
 
-  // Draw subtle dotted grid
+  // Draw subtle dotted grid lines for visual reference (doesn't affect gameplay)
+  // Draw vertical dotted lines
   for (int x = 1; x < MAZE_WIDTH; x++) {
     for (int y = 0; y < MAZE_HEIGHT * CELL_SIZE; y += 2) {
       display.drawPixel(x * CELL_SIZE, y, SSD1306_WHITE);
     }
   }
+  // Draw horizontal dotted lines
   for (int y = 1; y < MAZE_HEIGHT; y++) {
     for (int x = 0; x < MAZE_WIDTH * CELL_SIZE; x += 2) {
       display.drawPixel(x, y * CELL_SIZE, SSD1306_WHITE);
     }
   }
 
-  // Draw checkpoints
-  for (int i = 0; i < numCheckpoints; i++) {
-    int cpX = checkpoints[i].x * CELL_SIZE + CELL_SIZE/2;
-    int cpY = checkpoints[i].y * CELL_SIZE + CELL_SIZE/2;
-    
-    if (checkpoints[i].reached) {
-      // Filled circle for reached checkpoint
-      display.fillCircle(cpX, cpY, 3, SSD1306_WHITE);
-    } else if (i == currentCheckpoint) {
-      // Hollow circle for current target checkpoint
-      display.drawCircle(cpX, cpY, 3, SSD1306_WHITE);
-    } else {
-      // Small dot for future checkpoints
-      display.drawPixel(cpX, cpY, SSD1306_WHITE);
-    }
-  }
+  // Draw mid point (circle)
+  int middleX = midX * CELL_SIZE + CELL_SIZE/2;
+  int middleY = midY * CELL_SIZE + CELL_SIZE/2;
+  display.drawCircle(middleX, middleY, 3, SSD1306_WHITE);
+
+  // Draw mid point 2 (circle)
+  int middleX2 = midX2 * CELL_SIZE + CELL_SIZE/2;
+  int middleY2 = midY2 * CELL_SIZE + CELL_SIZE/2;
+  display.drawCircle(middleX2, middleY2, 3, SSD1306_WHITE);
   
-  // Draw player
+  // Draw player (filled dot)
   int playerPixelX = playerX * CELL_SIZE + CELL_SIZE/2;
   int playerPixelY = playerY * CELL_SIZE + CELL_SIZE/2;
   display.fillCircle(playerPixelX, playerPixelY, 2, SSD1306_WHITE);
-  
-  // Draw checkpoint counter at top
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.printf("CP: %d/%d", currentCheckpoint, numCheckpoints);
   
   display.display();
 }
@@ -371,14 +286,12 @@ void displayWinMessage() {
   
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 15);
+  display.setCursor(20, 20);
   display.println("You Win!");
   
   display.setTextSize(1);
-  display.setCursor(5, 40);
-  display.printf("All %d checkpoints!", numCheckpoints);
-  display.setCursor(10, 52);
-  display.println("Press to restart");
+  display.setCursor(10, 45);
+  display.println("Press button to restart");
   
   display.display();
 }
@@ -434,11 +347,10 @@ void reconnectMQTT() {
 }
 
 void sendConnectionStatus() {
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<200> doc;
   doc["type"] = "MAZE_MODULE_CONNECTED";
   doc["message"] = "Maze navigation module ready";
   doc["device"] = "ESP32_Maze";
-  doc["total_checkpoints"] = numCheckpoints;
   doc["timestamp"] = millis();
   
   String jsonString;
@@ -455,7 +367,7 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   
   Serial.println("Received MQTT message: " + message);
   
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
   
   if (!error) {
@@ -466,13 +378,6 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       gameWon = false;
       playerX = 1;
       playerY = 1;
-      
-      // Reset checkpoints
-      for (int i = 0; i < numCheckpoints; i++) {
-        checkpoints[i].reached = false;
-      }
-      currentCheckpoint = 0;
-      
       Serial.println("Game started via MQTT");
       
     } else if (command == "STOP_GAME") {
@@ -483,13 +388,6 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       gameWon = false;
       playerX = 1;
       playerY = 1;
-      
-      // Reset checkpoints
-      for (int i = 0; i < numCheckpoints; i++) {
-        checkpoints[i].reached = false;
-      }
-      currentCheckpoint = 0;
-      
       Serial.println("Game reset via MQTT");
       
     } else if (command == "PAUSE_TIMER") {
@@ -531,9 +429,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       Serial.println("🚀 Maze module activated! All modules connected.");
       sendConnectionStatus();
     }
-    else if (command == "UPDATE_MAZE_CONFIG") {
-      // Future: Load maze configuration from RPi
-      Serial.println("Received maze configuration update");
-    }
   }
+}
+
+void sendMqttMessage(String type, String message) {
+  StaticJsonDocument<200> doc;
+  doc["type"] = type;
+  doc["message"] = message;
+  doc["time"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  client.publish(publish_topic, jsonString.c_str());
 }
