@@ -45,15 +45,16 @@ Adafruit_SSD1306 display2(SCREEN_WIDTH, SCREEN_HEIGHT_COUNTER, &I2C_2, OLED_RESE
 // Global variables
 int countdownTime = 0;
 int initialCountdownTime = 0;
-int pausedTimeRemaining = 0;  // Store remaining time when paused
+int pausedTimeRemaining = 0;
 bool countdownActive = false;
-bool countdownPaused = false;  // Track if timer is paused
+bool countdownPaused = false;
 unsigned long lastUpdate = 0;
 int xCount = 0;
 int maxXCount = 3;
 int waiting = 0;
-unsigned long timerUpdateInterval = 1000;  // Base update interval (1 second)
-unsigned long lastHeartbeat = 0;  // Last time we sent a heartbeat
+unsigned long timerUpdateInterval = 1000;
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 3000;  // Send heartbeat every 3 seconds
 
 void setup() {
   Serial.begin(115200);
@@ -92,6 +93,7 @@ void setup() {
   Serial.println("  'reset' - Reset X counter");
   Serial.println("  'start 30' - Start 30-second timer");
   Serial.println("  'stop' - Stop timer");
+  Serial.println("  'resume' - Resume timer");
   
   delay(3000);
   showWaitingMessage();
@@ -119,8 +121,15 @@ void loop() {
   }
   client.loop();
   
+  // Send heartbeat every 3 seconds
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
+  }
+  
   // Update countdown with dynamic interval based on X count
-  if (countdownActive && millis() - lastUpdate >= timerUpdateInterval) {
+  // Only update if active and NOT paused
+  if (countdownActive && !countdownPaused && millis() - lastUpdate >= timerUpdateInterval) {
     updateCountdown();
     lastUpdate = millis();
   }
@@ -152,8 +161,11 @@ void handleSerialInput() {
     else if (input == "reset") {
       resetXCounter();
     }
-    else if (input == "stop") {
+    else if (input == "stop" || input == "pause") {
       stopCountdown();
+    }
+    else if (input == "resume") {
+      resumeCountdown();
     }
     else if (input == "test") {
       testDisplays();
@@ -216,8 +228,8 @@ void reconnectMQTT() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
+      Serial.println(" try again in 2 seconds");
+      delay(2000);
     }
   }
 }
@@ -250,9 +262,17 @@ void processMQTTMessage(String message) {
       Serial.printf("🚀 Starting timer for %d seconds\n", duration);
       startCountdown(duration);
     }
-    else if (type == "PAUSE_TIMER" || command == "PAUSE_TIMER") {
+    else if (type == "STOP_TIMER" || command == "STOP_TIMER") {
       Serial.println("⏹️ Stopping timer via MQTT");
       stopCountdown();
+    }
+    else if (type == "PAUSE_TIMER" || command == "PAUSE_TIMER") {
+      Serial.println("⏸️ Pausing timer via MQTT");
+      stopCountdown();
+    }
+    else if (type == "RESUME_TIMER" || command == "RESUME_TIMER") {
+      Serial.println("▶️ Resuming timer via MQTT");
+      resumeCountdown();
     }
     else if (type == "TEST" || command == "TEST") {
       testDisplays();
@@ -337,14 +357,27 @@ void sendToRaspberryPi(String message_type, String message_content) {
   }
 }
 
+void sendHeartbeat() {
+  if (client.connected() && waiting == 1) {
+    StaticJsonDocument<128> doc;
+    doc["type"] = "HEARTBEAT";
+    doc["device"] = "ESP32_Display";
+    doc["timestamp"] = millis();
+    doc["active"] = countdownActive;
+    doc["paused"] = countdownPaused;
+    
+    String json_string;
+    serializeJson(doc, json_string);
+    client.publish(topic_to_rpi, json_string.c_str());
+    
+    // Optional: Print heartbeat status (comment out if too spammy)
+    // Serial.println("💓 Heartbeat sent");
+  }
+}
+
 // ===== DISPLAY FUNCTIONS =====
 
 void updateTimerSpeed() {
-  // Update timer speed based on X count
-  // 0 X's = normal speed (1000ms = 1 second)
-  // 1 X = 25% faster (750ms = 1 second, so timer runs 1.33x speed)
-  // 2 X's = 50% faster (500ms = 1 second, so timer runs 2x speed)
-  
   if (xCount == 0) {
     timerUpdateInterval = 1000;  // Normal speed
   } else if (xCount == 1) {
@@ -363,7 +396,7 @@ void addXMark(String source) {
     xCount++;
     Serial.printf("✅ X count increased to: %d/%d\n", xCount, maxXCount);
     updateXDisplay();
-    updateTimerSpeed();  // Update timer speed when X is added
+    updateTimerSpeed();
     Serial.printf("❌ X added from %s! Total count: %d/%d\n", source.c_str(), xCount, maxXCount);
     
     sendToRaspberryPi("X_ADDED", "X mark added, total: " + String(xCount) + "/" + String(maxXCount));
@@ -382,32 +415,9 @@ void resetXCounter() {
   Serial.printf("🔄 Resetting X counter from %d to 0\n", xCount);
   xCount = 0;
   updateXDisplay();
-  updateTimerSpeed();  // Reset timer speed to normal
+  updateTimerSpeed();
   Serial.println("🔄 X counter reset to 0");
   sendToRaspberryPi("X_RESET", "X counter reset to 0");
-}
-
-void showMaxXReached() {
-  display2.clearDisplay();
-  display2.setTextSize(2);
-  display2.setTextColor(SSD1306_WHITE);
-  display2.setCursor(35, 5);
-  display2.println("MAX");
-  display2.setCursor(15, 20);
-  display2.println("LIMIT!");
-  
-  display2.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT_COUNTER, SSD1306_WHITE);
-  display2.drawRect(1, 1, SCREEN_WIDTH-2, SCREEN_HEIGHT_COUNTER-2, SSD1306_WHITE);
-  
-  display2.display();
-  
-  for (int i = 0; i < 4; i++) {
-    delay(500);
-    display2.invertDisplay(i % 2);
-  }
-  
-  delay(1000);
-  updateXDisplay();
 }
 
 void testDisplays() {
@@ -537,8 +547,9 @@ void startCountdown(int seconds) {
   countdownTime = seconds;
   initialCountdownTime = seconds;
   countdownActive = true;
+  countdownPaused = false;
   lastUpdate = millis();
-  updateTimerSpeed();  // Set initial timer speed based on current X count
+  updateTimerSpeed();
   
   displayCountdown();
   
@@ -586,19 +597,6 @@ void displayCountdown() {
   display1.drawRect(4, 55, 120, 6, SSD1306_WHITE);
   display1.fillRect(4, 55, barWidth, 6, SSD1306_WHITE);
   
-  // Show speed indicator based on X count
-  if (xCount == 1) {
-    // Show 1.25x speed indicator
-    display1.setTextSize(1);
-    display1.setCursor(95, 45);
-    display1.print("1.3x");
-  } else if (xCount >= 2) {
-    // Show 2x speed indicator
-    display1.setTextSize(1);
-    display1.setCursor(100, 45);
-    display1.print("2x");
-  }
-  
   if (countdownTime <= 10 && countdownTime > 0) {
     if ((millis() / 500) % 2) {
       display1.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT_TIMER, SSD1306_WHITE);
@@ -632,10 +630,9 @@ void showTimesUp() {
 
 void stopCountdown() {
   if (countdownActive) {
-    // Store remaining time before stopping
     pausedTimeRemaining = countdownTime;
     countdownActive = false;
-    countdownPaused = true;  // Mark as paused, not stopped
+    countdownPaused = true;
     
     display1.clearDisplay();
     display1.setTextSize(2);
@@ -643,7 +640,6 @@ void stopCountdown() {
     display1.setCursor(15, 15);
     display1.println("PAUSED");
     
-    // Show remaining time
     display1.setTextSize(1);
     display1.setCursor(25, 40);
     int mins = pausedTimeRemaining / 60;
@@ -662,7 +658,7 @@ void resumeCountdown() {
     countdownActive = true;
     countdownPaused = false;
     lastUpdate = millis();
-    updateTimerSpeed();  // Maintain current speed based on X count
+    updateTimerSpeed();
     
     displayCountdown();
     
@@ -679,23 +675,19 @@ void resumeCountdown() {
 void updateXDisplay() {
   display2.clearDisplay();
   
-  // Display only X marks, no count text
   display2.setTextSize(3);
   display2.setTextColor(SSD1306_WHITE);
   
-  // Calculate spacing for X marks
   int xSpacing = 35;
   int startX = (SCREEN_WIDTH - (min(maxXCount, xCount) * xSpacing)) / 2;
-  int yPos = 5;  // Centered vertically for 32-pixel display
+  int yPos = 5;
   
-  // Draw X marks
   for (int i = 0; i < xCount && i < maxXCount; i++) {
     int xPos = startX + (i * xSpacing);
     display2.setCursor(xPos, yPos);
     display2.print("X");
   }
   
-  // Add warning border if approaching limit
   if (xCount >= maxXCount - 1 && xCount < maxXCount) {
     display2.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT_COUNTER, SSD1306_WHITE);
   }
@@ -704,4 +696,3 @@ void updateXDisplay() {
   
   Serial.printf("X Display Update: %d/%d X marks shown\n", xCount, maxXCount);
 }
-

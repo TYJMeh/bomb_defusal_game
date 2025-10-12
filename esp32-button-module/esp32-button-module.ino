@@ -36,6 +36,7 @@ bool buttonEnabled = true;
 // Game state
 bool gameActive = true;
 bool gameWon = false;
+bool gamePaused = false;
 int waiting = 0;
 
 CRGB leds[NUM_LEDS];
@@ -84,8 +85,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 
   String command = doc["command"];
+  String type = doc["type"];
   
-  if (command == "X") {
+  if (command == "X" || type == "X") {
     Serial.println("Received 'X' signal - Penalty applied!");
     
     // Flash red LEDs to indicate penalty
@@ -100,24 +102,26 @@ void callback(char* topic, byte* payload, unsigned int length) {
     
     Serial.println("Game continues after penalty!");
   }
-  else if (command == "START_GAME") {
+  else if (command == "START_GAME" || type == "START_GAME") {
     Serial.println("Starting new game!");
     gameActive = true;
     gameWon = false;
+    gamePaused = false;
     currentLed = 0;
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
   }
-  else if (command == "RESET_GAME") {
+  else if (command == "RESET_GAME" || type == "RESET_GAME") {
     Serial.println("Resetting game!");
     gameActive = true;
     gameWon = false;
+    gamePaused = false;
     currentLed = 0;
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
   }
-  else if (command == "PAUSE_TIMER") {
-    gameActive = false;
+  else if (command == "PAUSE_TIMER" || type == "PAUSE_TIMER") {
+    gamePaused = true;
     Serial.println("⏸️ Button game paused");
     
     // Visual feedback - orange/yellow LEDs
@@ -137,9 +141,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     serializeJson(doc, output);
     client.publish(publish_topic, output.c_str());
   }
-  else if (command == "RESUME_TIMER") {
+  else if (command == "RESUME_TIMER" || type == "RESUME_TIMER") {
     if (!gameWon) {
-      gameActive = true;
+      gamePaused = false;
       Serial.println("▶️ Button game resumed");
       
       // Visual feedback - green flash
@@ -160,7 +164,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
       client.publish(publish_topic, output.c_str());
     }
   }
-  else if (command == "UPDATE_BUTTON_CONFIG") {
+  else if (command == "UPDATE_BUTTON_CONFIG" || type == "UPDATE_BUTTON_CONFIG") {
     // Update button configuration from Raspberry Pi
     if (doc.containsKey("button_id")) {
       currentButtonId = doc["button_id"].as<String>();
@@ -184,7 +188,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     // Send confirmation
     sendButtonConfigUpdate();
   }
-  else if (command == "ACTIVATE") {
+  else if (command == "ACTIVATE" || type == "ACTIVATE") {
     // Activate module - all modules are connected
     waiting = 1;
     Serial.println("🚀 Button module activated! All modules connected.");
@@ -208,8 +212,8 @@ void reconnect() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
+      Serial.println(" try again in 2 seconds");
+      delay(2000);
     }
   }
 }
@@ -319,12 +323,16 @@ void sendHeartbeat() {
     doc["timestamp"] = millis();
     doc["game_active"] = gameActive;
     doc["game_won"] = gameWon;
+    doc["game_paused"] = gamePaused;
     doc["button_id"] = currentButtonId;
     doc["target_time"] = targetTime;
     
     String output;
     serializeJson(doc, output);
     client.publish(publish_topic, output.c_str());
+    
+    // Optional debug output
+    // Serial.println("💓 Heartbeat sent");
   }
 }
 
@@ -350,23 +358,23 @@ void loop() {
   }
   client.loop();
 
+  // Send heartbeat every 3 seconds - MOVED BEFORE the return statements
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
+  }
+
+  // Check waiting status
   if (waiting == 0) {
     // Module is waiting for all modules to connect
     // Only handle MQTT, no game logic
     return;
   }
-  else if (waiting == 1) {
-    // All modules connected, normal operation
-    // Only process game logic if game is active and button is enabled
-    if (!gameActive || !buttonEnabled) {
-      return;
-    }
-  }
 
-  // Send heartbeat every 3 seconds
-  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
-    sendHeartbeat();
-    lastHeartbeat = millis();
+  // Only process game logic if game is active, not paused, not won, and button is enabled
+  if (!gameActive || gamePaused || gameWon || !buttonEnabled) {
+    // Still send heartbeats but don't process button input
+    return;
   }
 
   buttonState = digitalRead(buttonPin);
