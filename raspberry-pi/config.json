@@ -27,8 +27,35 @@
             "buffer": 500,
             "enabled": false
         }
+    },
+    "maze_ID": {
+        "maze_1": {
+            "maze_size": "small",
+            "enabled": true
+        },
+        "maze_2": {
+            "maze_size": "medium",
+            "enabled": false
+        },
+        "maze_3": {
+            "maze_size": "large",
+            "enabled": false
+        }
+    },
+    "wire_ID": {
+        "wire_1": {
+            "enabled": true
+        },
+        "wire_2": {
+            "enabled": false
+        },
+        "wire_3": {
+            "enabled": false
+        },
+        "wire_4": {
+            "enabled": false
+        }
     }
-
 
 
 
