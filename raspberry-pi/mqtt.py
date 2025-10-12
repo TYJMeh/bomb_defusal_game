@@ -41,8 +41,8 @@ BROKER = "192.168.1.201"
 CONFIG_FILE = "config.json"
 
 # Heartbeat settings
-HEARTBEAT_INTERVAL = 3  # ESP32s send every 3 seconds
-HEARTBEAT_TIMEOUT = 8   # Consider missed if not received within 8 seconds
+HEARTBEAT_INTERVAL = 2  # ESP32s send every 3 seconds
+HEARTBEAT_TIMEOUT = 15   # Consider missed if not received within 15 seconds
 MAX_MISSED_HEARTBEATS = 2  # Disconnect after 2 missed (16 seconds total)
 HEARTBEAT_CHECK_INTERVAL = 2  # Check every 2 seconds
 
