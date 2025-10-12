@@ -117,12 +117,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
     waiting = 1;
     Serial.println("🚀 Button module activated! All modules connected.");
     sendConnectionStatus();
+  }else if (command == "PAUSE_TIMER") {
+   gameActive = false;
+   Serial.println("⏸️ Button game paused");
   }
-  // Add to callback() function, inside the command parsing section:
-else if (command == "PAUSE_TIMER") {
-  gameActive = false;
-  Serial.println("⏸️ Button game paused");
-  
+  else if (command == "RESUME_TIMER") {
+    if (!gameWon) {
+      gameActive = true;
+      Serial.println("▶️ Button game resumed");
+    }
   // Visual feedback - orange/yellow LEDs
   fill_solid(leds, NUM_LEDS, CRGB(255, 165, 0));
   FastLED.show();
@@ -139,7 +142,8 @@ else if (command == "PAUSE_TIMER") {
   String output;
   serializeJson(doc, output);
   client.publish(publish_topic, output.c_str());
-}
+  }
+  }
 else if (command == "RESUME_TIMER") {
   if (!gameWon) {
       gameActive = true;

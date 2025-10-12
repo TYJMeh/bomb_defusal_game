@@ -161,7 +161,7 @@ void loop() {
   client.loop();
   if (waiting == 0) {
     // Module is waiting for all modules to connect
-    // Only handle MQTT and serial commands, no game logic
+    // Only handle MQTT and serial commands, no game +
     handleSerialCommands();
   }
   else if (waiting == 1) {
