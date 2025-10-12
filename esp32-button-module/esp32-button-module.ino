@@ -120,31 +120,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }else if (command == "PAUSE_TIMER") {
    gameActive = false;
    Serial.println("⏸️ Button game paused");
-  }
-  else if (command == "RESUME_TIMER") {
-    if (!gameWon) {
-      gameActive = true;
-      Serial.println("▶️ Button game resumed");
-    }
-  // Visual feedback - orange/yellow LEDs
-  fill_solid(leds, NUM_LEDS, CRGB(255, 165, 0));
-  FastLED.show();
-  delay(300);
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
-  FastLED.show();
-  
-  DynamicJsonDocument doc(256);
-  doc["type"] = "BUTTON_GAME_PAUSED";
-  doc["message"] = "Button game paused";
-  doc["device"] = "ESP32_Button";
-  doc["timestamp"] = millis();
-  
-  String output;
-  serializeJson(doc, output);
-  client.publish(publish_topic, output.c_str());
-  }
-  }
-else if (command == "RESUME_TIMER") {
+  }else if (command == "RESUME_TIMER") {
   if (!gameWon) {
       gameActive = true;
       Serial.println("▶️ Button game resumed");
