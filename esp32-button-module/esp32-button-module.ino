@@ -118,36 +118,76 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("🚀 Button module activated! All modules connected.");
     sendConnectionStatus();
   }
-  else if (command == "PAUSE_TIMER") {
-    gameActive = false;
-    Serial.println("⏸️ Maze game paused");
-    
-    StaticJsonDocument<200> doc;
-    doc["type"] = "MAZE_PAUSED";
-    doc["message"] = "Maze game paused";
-    doc["device"] = "ESP32_Maze";
-    doc["timestamp"] = millis();
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    client.publish(publish_topic, jsonString.c_str());
+  // Add to callback() function, inside the command parsing section:
+else if (command == "PAUSE_TIMER") {
+  gameActive = false;
+  Serial.println("⏸️ Button game paused");
+  
+  // Visual feedback - orange/yellow LEDs
+  fill_solid(leds, NUM_LEDS, CRGB(255, 165, 0));
+  FastLED.show();
+  delay(300);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
+  
+  DynamicJsonDocument doc(256);
+  doc["type"] = "BUTTON_GAME_PAUSED";
+  doc["message"] = "Button game paused";
+  doc["device"] = "ESP32_Button";
+  doc["timestamp"] = millis();
+  
+  String output;
+  serializeJson(doc, output);
+  client.publish(publish_topic, output.c_str());
 }
 else if (command == "RESUME_TIMER") {
-    if (!gameWon) {
-        gameActive = true;
-        Serial.println("▶️ Maze game resumed");
-        
-        StaticJsonDocument<200> doc;
-        doc["type"] = "MAZE_RESUMED";
-        doc["message"] = "Maze game resumed";
-        doc["device"] = "ESP32_Maze";
-        doc["timestamp"] = millis();
-        
-        String jsonString;
-        serializeJson(doc, jsonString);
-        client.publish(publish_topic, jsonString.c_str());
-    }
+  if (!gameWon) {
+      gameActive = true;
+      Serial.println("▶️ Button game resumed");
+      
+      // Visual feedback - green flash
+      fill_solid(leds, NUM_LEDS, CRGB::Green);
+      FastLED.show();
+      delay(300);
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      FastLED.show();
+      
+      DynamicJsonDocument doc(256);
+      doc["type"] = "BUTTON_GAME_RESUMED";
+      doc["message"] = "Button game resumed";
+      doc["device"] = "ESP32_Button";
+      doc["timestamp"] = millis();
+      
+      String output;
+      serializeJson(doc, output);
+      client.publish(publish_topic, output.c_str());
+  }
 }
+
+// Add WiFi reconnection to loop():
+void loop() {
+// Check WiFi connection first
+if (WiFi.status() != WL_CONNECTED) {
+  Serial.println("WiFi disconnected! Reconnecting...");
+  WiFi.disconnect();
+  WiFi.begin(ssid, password);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi reconnected!");
+  }
+}
+
+if (!client.connected()) {
+  reconnectMQTT();
+}
+client.loop();
+
+// Rest of your existing code...
 }
 
 void reconnect() {

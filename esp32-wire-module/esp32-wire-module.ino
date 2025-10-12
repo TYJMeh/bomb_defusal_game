@@ -178,8 +178,9 @@ void loop() {
   }
 
   if (!client.connected()) {
-    reconnect();
+    reconnectMQTT();
   }
+  
 
   delay(10);  // Small delay for stability
 }
