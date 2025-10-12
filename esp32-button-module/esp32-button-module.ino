@@ -26,12 +26,17 @@ const int ledDelay = 500;
 
 unsigned long buttonPressTime = 0;
 unsigned long pressDuration = 0;
+
+// Button configuration (loaded from Raspberry Pi)
+String currentButtonId = "button_1";
 int targetTime = 2000;
+int bufferTime = 500;
+bool buttonEnabled = true;
 
 // Game state
 bool gameActive = true;
 bool gameWon = false;
-int waiting = 0;    // Waiting for all modules to connect
+int waiting = 0;
 
 CRGB leds[NUM_LEDS];
 
@@ -93,7 +98,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
       delay(300);
     }
     
-    // Game continues after penalty
     Serial.println("Game continues after penalty!");
   }
   else if (command == "START_GAME") {
@@ -112,12 +116,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
   }
-  else if (command == "ACTIVATE") {
-    // Activate module - all modules are connected
-    waiting = 1;
-    Serial.println("🚀 Button module activated! All modules connected.");
-    sendConnectionStatus();
-  }else if (command == "PAUSE_TIMER") {
+  else if (command == "PAUSE_TIMER") {
     gameActive = false;
     Serial.println("⏸️ Button game paused");
     
@@ -137,7 +136,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     String output;
     serializeJson(doc, output);
     client.publish(publish_topic, output.c_str());
-  }else if (command == "RESUME_TIMER") {
+  }
+  else if (command == "RESUME_TIMER") {
     if (!gameWon) {
       gameActive = true;
       Serial.println("▶️ Button game resumed");
@@ -158,7 +158,41 @@ void callback(char* topic, byte* payload, unsigned int length) {
       String output;
       serializeJson(doc, output);
       client.publish(publish_topic, output.c_str());
+    }
   }
+  else if (command == "UPDATE_BUTTON_CONFIG") {
+    // Update button configuration from Raspberry Pi
+    if (doc.containsKey("button_id")) {
+      currentButtonId = doc["button_id"].as<String>();
+    }
+    if (doc.containsKey("target_time")) {
+      targetTime = doc["target_time"];
+    }
+    if (doc.containsKey("buffer")) {
+      bufferTime = doc["buffer"];
+    }
+    if (doc.containsKey("enabled")) {
+      buttonEnabled = doc["enabled"];
+    }
+    
+    Serial.println("Button configuration updated:");
+    Serial.printf("  Button ID: %s\n", currentButtonId.c_str());
+    Serial.printf("  Target time: %d ms\n", targetTime);
+    Serial.printf("  Buffer: %d ms\n", bufferTime);
+    Serial.printf("  Enabled: %s\n", buttonEnabled ? "Yes" : "No");
+    
+    // Send confirmation
+    sendButtonConfigUpdate();
+  }
+  else if (command == "ACTIVATE") {
+    // Activate module - all modules are connected
+    waiting = 1;
+    Serial.println("🚀 Button module activated! All modules connected.");
+    
+    // Request button configuration from Raspberry Pi
+    requestButtonConfig();
+    
+    sendConnectionStatus();
   }
 }
 
@@ -185,14 +219,45 @@ void sendConnectionStatus() {
   doc["type"] = "BUTTON_MODULE_CONNECTED";
   doc["message"] = "Button timing module ready";
   doc["device"] = "ESP32_Button";
+  doc["button_id"] = currentButtonId;
   doc["target_time"] = targetTime;
-  doc["tolerance"] = 500;
+  doc["buffer"] = bufferTime;
+  doc["enabled"] = buttonEnabled;
   doc["timestamp"] = millis();
   
   String output;
   serializeJson(doc, output);
   client.publish(publish_topic, output.c_str());
   Serial.println("Sent connection status to Raspberry Pi");
+}
+
+void requestButtonConfig() {
+  DynamicJsonDocument doc(256);
+  doc["type"] = "REQUEST_BUTTON_CONFIG";
+  doc["message"] = "Requesting button configuration";
+  doc["device"] = "ESP32_Button";
+  doc["timestamp"] = millis();
+  
+  String output;
+  serializeJson(doc, output);
+  client.publish(publish_topic, output.c_str());
+  Serial.println("Requested button configuration from Raspberry Pi");
+}
+
+void sendButtonConfigUpdate() {
+  DynamicJsonDocument doc(512);
+  doc["type"] = "BUTTON_CONFIG_UPDATED";
+  doc["message"] = "Button configuration received and applied";
+  doc["device"] = "ESP32_Button";
+  doc["button_id"] = currentButtonId;
+  doc["target_time"] = targetTime;
+  doc["buffer"] = bufferTime;
+  doc["enabled"] = buttonEnabled;
+  doc["timestamp"] = millis();
+  
+  String output;
+  serializeJson(doc, output);
+  client.publish(publish_topic, output.c_str());
 }
 
 void sendGameResult(bool won, unsigned long duration) {
@@ -206,9 +271,10 @@ void sendGameResult(bool won, unsigned long duration) {
     doc["message"] = "Player lost the button timing game!";
   }
   
+  doc["button_id"] = currentButtonId;
   doc["press_duration"] = duration;
   doc["target_time"] = targetTime;
-  doc["tolerance"] = 500;
+  doc["buffer"] = bufferTime;
   doc["difference"] = abs((int)duration - targetTime);
   doc["timestamp"] = millis();
   doc["device"] = "ESP32_Button";
@@ -236,19 +302,25 @@ void setup() {
   
   Serial.println("ESP32 Button Game Started!");
   Serial.println("Hold button to light up LEDs one by one");
+  Serial.print("Current Button ID: ");
+  Serial.println(currentButtonId);
   Serial.print("Target time: ");
   Serial.print(targetTime);
-  Serial.println(" ms (+/- 500ms)");
+  Serial.print(" ms (+/- ");
+  Serial.print(bufferTime);
+  Serial.println(" ms)");
 }
 
 void sendHeartbeat() {
   if (client.connected() && waiting == 1) {
-    DynamicJsonDocument doc(128);
+    DynamicJsonDocument doc(256);
     doc["type"] = "HEARTBEAT";
     doc["device"] = "ESP32_Button";
     doc["timestamp"] = millis();
     doc["game_active"] = gameActive;
     doc["game_won"] = gameWon;
+    doc["button_id"] = currentButtonId;
+    doc["target_time"] = targetTime;
     
     String output;
     serializeJson(doc, output);
@@ -273,7 +345,6 @@ void loop() {
     }
   }
   
-  // Maintain MQTT connection
   if (!client.connected()) {
     reconnect();
   }
@@ -286,8 +357,8 @@ void loop() {
   }
   else if (waiting == 1) {
     // All modules connected, normal operation
-    // Only process game logic if game is active
-    if (!gameActive) {
+    // Only process game logic if game is active and button is enabled
+    if (!gameActive || !buttonEnabled) {
       return;
     }
   }
@@ -313,7 +384,11 @@ void loop() {
     Serial.println(" ms");
     
     if (buttonPressTime != 0) {
-      if (pressDuration >= (targetTime - 500) && pressDuration <= (targetTime + 500)) {
+      // Check if within target range (target ± buffer)
+      int minTime = targetTime - bufferTime;
+      int maxTime = targetTime + bufferTime;
+      
+      if (pressDuration >= minTime && pressDuration <= maxTime) {
         Serial.println("You Win!");
         gameWon = true;
         gameActive = false;
@@ -351,6 +426,15 @@ void loop() {
       Serial.print("You were ");
       Serial.print(abs(difference));
       Serial.println(" ms off target");
+      
+      // Show performance feedback
+      if (abs(difference) < 100) {
+        Serial.println("Performance: Excellent! (< 100ms off)");
+      } else if (abs(difference) < 300) {
+        Serial.println("Performance: Good! (< 300ms off)");
+      } else if (abs(difference) < bufferTime) {
+        Serial.println("Performance: Close! (within buffer)");
+      }
     }
   }
   

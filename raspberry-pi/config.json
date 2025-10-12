@@ -10,5 +10,27 @@
         "simultaneous_start": true,
         "require_all_connected": true,
         "emergency_stop_on_disconnect": true
+    },
+    "button_settings": {
+        "button_1": {
+            "target_time": 2000,
+            "buffer": 500,
+            "enabled": true
+        },
+        "button_2": {
+            "target_time": 2500,
+            "buffer": 500,
+            "enabled": false
+        },
+        "button_3": {
+            "target_time": 3000,
+            "buffer": 500,
+            "enabled": false
+        }
     }
+
+
+
+
+
 }
