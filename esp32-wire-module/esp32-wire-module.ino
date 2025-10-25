@@ -2,6 +2,9 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
+const int red_light = 15;
+const int green_light = 17;
+
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_INTERVAL = 3000;
 
@@ -83,6 +86,9 @@ void setup() {
   setupWiFi();
   client.setServer(mqtt_broker, mqtt_port);
   client.setCallback(mqttCallback);
+
+  pinMode(red_light, OUTPUT);
+  pinMode(green_light, OUTPUT);
   
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
@@ -246,6 +252,7 @@ void checkPuzzleStep(int cut_wire_index) {
       Serial.println("All steps finished successfully!");
       
       sendToRaspberryPi("PUZZLE_COMPLETED", "Wire cutting puzzle completed successfully!");
+      digitalWrite(green_light,HIGH);
       
     } else {
       Serial.println("\n📋 NEXT STEP:");
@@ -282,6 +289,10 @@ void checkPuzzleStep(int cut_wire_index) {
                   current_step + 1, 
                   TOTAL_STEPS, 
                   puzzle_sequence[current_step].instruction.c_str());
+
+    digitalWrite(red_light,HIGH);
+    delay(3000);
+    digitalWrite(red_light,LOW);
   }
   
   sendGameStatusJSON();
