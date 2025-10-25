@@ -293,7 +293,17 @@ def on_message(client, userdata, msg):
             print("\nMAZE MODULE CONNECTED!")
             print(f"  Device: {data.get('device', 'Unknown')}")
             modules_connected["maze"] = True
+            
+            # Send maze configuration from config file
+            config = load_config()
+            send_maze_config(client, config)
+            
             check_all_modules_connected(client)
+        
+        elif msg_type == "REQUEST_MAZE_CONFIG":
+            print("Maze module requesting configuration...")
+            config = load_config()
+            send_maze_config(client, config)
             
         elif msg_type == "BUTTON_MODULE_CONNECTED":
             print("\nBUTTON MODULE CONNECTED!")
@@ -590,6 +600,134 @@ def resume_all_games(client):
     
     client.publish("rpi/to/esp2", json.dumps(resume_command))
     print("Timer resumed after reconnection")
+
+def send_button_config(client, config):
+    """Send button configuration to button module"""
+    try:
+        button_configs = config.get("button_ID", {})
+        
+        if not button_configs:
+            print("⚠️ Warning: No button_ID section in config, using defaults")
+            # Use default configuration
+            enabled_button = {
+                "button_id": "button_1",
+                "target_time": 2000,
+                "buffer": 500,
+                "enabled": True
+            }
+        else:
+            # Find the enabled button
+            enabled_button = None
+            for button_id, button_data in button_configs.items():
+                if button_data.get("enabled", False):
+                    enabled_button = {
+                        "button_id": button_id,
+                        "target_time": button_data.get("target_time", 2000),
+                        "buffer": button_data.get("buffer", 500),
+                        "enabled": True
+                    }
+                    break
+            
+            if not enabled_button:
+                print("⚠️ Warning: No enabled button found, using defaults")
+                enabled_button = {
+                    "button_id": "button_1",
+                    "target_time": 2000,
+                    "buffer": 500,
+                    "enabled": True
+                }
+        
+        config_command = {
+            "type": "UPDATE_BUTTON_CONFIG",
+            "command": "UPDATE_BUTTON_CONFIG",
+            **enabled_button
+        }
+        client.publish("rpi/to/esp4", json.dumps(config_command))
+        print(f"✅ Sent button config: {enabled_button['button_id']} - {enabled_button['target_time']}ms ±{enabled_button['buffer']}ms")
+    
+    except Exception as e:
+        print(f"❌ Error sending button config: {e}")
+        print("   Using default button configuration")
+        # Send minimal default config
+        default_config = {
+            "type": "UPDATE_BUTTON_CONFIG",
+            "command": "UPDATE_BUTTON_CONFIG",
+            "button_id": "button_1",
+            "target_time": 2000,
+            "buffer": 500,
+            "enabled": True
+        }
+        client.publish("rpi/to/esp4", json.dumps(default_config))
+
+def send_maze_config(client, config):
+    """Send maze configuration to maze module"""
+    try:
+        maze_configs = config.get("maze_ID", {})
+        
+        if not maze_configs:
+            print("⚠️ Warning: No maze_ID section in config, using defaults")
+            # Use default maze configuration
+            enabled_maze = {
+                "maze_id": "maze_1",
+                "name": "Default Maze",
+                "start_x": 1,
+                "start_y": 1,
+                "end_x": 14,
+                "end_y": 6,
+                "checkpoint_1_x": 4,
+                "checkpoint_1_y": 3,
+                "checkpoint_2_x": 9,
+                "checkpoint_2_y": 3,
+                "maze_layout": []
+            }
+        else:
+            # Find the enabled maze
+            enabled_maze = None
+            for maze_id, maze_data in maze_configs.items():
+                if maze_data.get("enabled", False):
+                    enabled_maze = {
+                        "maze_id": maze_id,
+                        "name": maze_data.get("name", "Default Maze"),
+                        "start_x": maze_data.get("start_x", 1),
+                        "start_y": maze_data.get("start_y", 1),
+                        "end_x": maze_data.get("end_x", 14),
+                        "end_y": maze_data.get("end_y", 6),
+                        "checkpoint_1_x": maze_data.get("checkpoint_1_x", 4),
+                        "checkpoint_1_y": maze_data.get("checkpoint_1_y", 3),
+                        "checkpoint_2_x": maze_data.get("checkpoint_2_x", 9),
+                        "checkpoint_2_y": maze_data.get("checkpoint_2_y", 3),
+                        "maze_layout": maze_data.get("maze_layout", [])
+                    }
+                    break
+            
+            if not enabled_maze:
+                print("⚠️ Warning: No enabled maze found, using defaults")
+                enabled_maze = {
+                    "maze_id": "maze_1",
+                    "name": "Default Maze",
+                    "start_x": 1,
+                    "start_y": 1,
+                    "end_x": 14,
+                    "end_y": 6,
+                    "checkpoint_1_x": 4,
+                    "checkpoint_1_y": 3,
+                    "checkpoint_2_x": 9,
+                    "checkpoint_2_y": 3,
+                    "maze_layout": []
+                }
+        
+        config_command = {
+            "type": "UPDATE_MAZE_CONFIG",
+            "command": "UPDATE_MAZE_CONFIG",
+            **enabled_maze
+        }
+        client.publish("rpi/to/esp3", json.dumps(config_command))
+        print(f"✅ Sent maze config: {enabled_maze['maze_id']} - {enabled_maze['name']}")
+        print(f"   Start: ({enabled_maze['start_x']}, {enabled_maze['start_y']}) End: ({enabled_maze['end_x']}, {enabled_maze['end_y']})")
+    
+    except Exception as e:
+        print(f"❌ Error sending maze config: {e}")
+        print("   Maze module will use built-in defaults")
 
 def main():
     client = mqtt.Client()
