@@ -67,9 +67,13 @@ bool gamePaused = false;
 unsigned long lastMoveTime = 0;
 const unsigned long moveDelay = 200;
 int waiting = 0;
+bool configReceived = false;
 
 void setup() {
   Serial.begin(115200);
+  
+  // Increase MQTT buffer size to handle large maze configurations
+  client.setBufferSize(2048);
   
   setupWiFi();
   
@@ -86,7 +90,7 @@ void setup() {
   display.clearDisplay();
   display.display();
   
-  Serial.println("Maze Game Started!");
+  Serial.println("=== Maze Game Started ===");
   Serial.println("Waiting for configuration from Raspberry Pi...");
 }
 
@@ -100,6 +104,7 @@ void sendHeartbeat() {
     doc["game_won"] = gameWon;
     doc["game_paused"] = gamePaused;
     doc["maze_id"] = currentMazeId;
+    doc["config_received"] = configReceived;
     
     String json_string;
     serializeJson(doc, json_string);
@@ -187,13 +192,15 @@ void handleInput() {
         // Hit a wall - reset to start position
         playerX = startX;
         playerY = startY;
-        Serial.println("Hit wall! Returning to start.");
+        Serial.println("💥 Hit wall! Returning to start.");
         
         StaticJsonDocument<200> doc;
         doc["type"] = "WALL_HIT";
         doc["message"] = "Player hit wall and returned to start";
         doc["device"] = "ESP32_Maze";
         doc["maze_id"] = currentMazeId;
+        doc["position_x"] = newX;
+        doc["position_y"] = newY;
         doc["timestamp"] = millis();
         
         String jsonString;
@@ -208,9 +215,9 @@ void handleInput() {
         // Check if reached the end
         if (playerX == endX && playerY == endY) {
           gameWon = true;
-          Serial.println("You Win!");
+          Serial.println("🎉 You Win!");
           
-          StaticJsonDocument<200> doc;
+          StaticJsonDocument<256> doc;
           doc["type"] = "MAZE_COMPLETED";
           doc["message"] = "Player completed the maze!";
           doc["maze_id"] = currentMazeId;
@@ -293,7 +300,7 @@ void displayWinMessage() {
   display.println("You Win!");
   
   display.setTextSize(1);
-  display.setCursor(10, 40);
+  display.setCursor(5, 40);
   display.println(mazeName.c_str());
   display.setCursor(5, 52);
   display.println("Press button to restart");
@@ -306,10 +313,15 @@ void displayWaitingMessage() {
   
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 20);
+  display.setCursor(15, 20);
   display.println("Game Inactive");
   display.setCursor(10, 35);
-  display.println("Waiting for RPi...");
+  
+  if (configReceived) {
+    display.println("Waiting for start...");
+  } else {
+    display.println("Loading config...");
+  }
   
   display.display();
 }
@@ -348,8 +360,8 @@ void setupWiFi() {
   }
   
   Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
+  Serial.println("✓ WiFi connected");
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 }
 
@@ -360,8 +372,15 @@ void reconnectMQTT() {
     if (client.connect("ESP32_Maze_Game")) {
       Serial.println("connected");
       client.subscribe(subscribe_topic);
+      Serial.printf("Subscribed to: %s\n", subscribe_topic);
       
+      // Send connection status
       sendConnectionStatus();
+      
+      // Wait a moment for connection to stabilize
+      delay(500);
+      
+      // Request maze configuration
       requestMazeConfig();
     } else {
       Serial.print("failed, rc=");
@@ -378,15 +397,18 @@ void sendConnectionStatus() {
   doc["message"] = "Maze navigation module ready";
   doc["device"] = "ESP32_Maze";
   doc["maze_id"] = currentMazeId;
+  doc["config_received"] = configReceived;
   doc["timestamp"] = millis();
   
   String jsonString;
   serializeJson(doc, jsonString);
   client.publish(publish_topic, jsonString.c_str());
-  Serial.println("Sent connection status to Raspberry Pi");
+  Serial.println("✓ Sent connection status to Raspberry Pi");
 }
 
 void requestMazeConfig() {
+  Serial.println("\n📨 Requesting maze configuration from Raspberry Pi...");
+  
   StaticJsonDocument<128> doc;
   doc["type"] = "REQUEST_MAZE_CONFIG";
   doc["message"] = "Requesting maze configuration";
@@ -396,14 +418,18 @@ void requestMazeConfig() {
   String jsonString;
   serializeJson(doc, jsonString);
   client.publish(publish_topic, jsonString.c_str());
-  Serial.println("Requested maze configuration from Raspberry Pi");
+  
+  Serial.println("✓ Configuration request sent");
 }
 
 void applyMazeConfig(JsonDocument& doc) {
-  Serial.println("\n🔧 APPLYING MAZE CONFIGURATION...");
+  Serial.println("\n==================================================");
+  Serial.println("🔧 APPLYING MAZE CONFIGURATION");
+  Serial.println("==================================================");
   
-  currentMazeId = doc["maze_id"].as<String>();
-  mazeName = doc["name"].as<String>();
+  // Extract configuration values
+  currentMazeId = doc["maze_id"] | "maze_1";
+  mazeName = doc["name"] | "Default Maze";
   startX = doc["start_x"] | 1;
   startY = doc["start_y"] | 1;
   endX = doc["end_x"] | 14;
@@ -415,15 +441,17 @@ void applyMazeConfig(JsonDocument& doc) {
   
   Serial.printf("  Maze ID: %s\n", currentMazeId.c_str());
   Serial.printf("  Name: %s\n", mazeName.c_str());
-  Serial.printf("  Start: (%d, %d)\n", startX, startY);
-  Serial.printf("  End: (%d, %d)\n", endX, endY);
+  Serial.printf("  Start Position: (%d, %d)\n", startX, startY);
+  Serial.printf("  End Position: (%d, %d)\n", endX, endY);
+  Serial.printf("  Checkpoint 1: (%d, %d)\n", checkpoint1X, checkpoint1Y);
+  Serial.printf("  Checkpoint 2: (%d, %d)\n", checkpoint2X, checkpoint2Y);
   
   // Load maze layout if provided
   if (doc.containsKey("maze_layout")) {
     JsonArray layout = doc["maze_layout"];
     
     if (layout.size() > 0) {
-      Serial.printf("  Loading maze layout: %d rows\n", layout.size());
+      Serial.printf("\n📍 Loading maze layout: %d rows\n", layout.size());
       
       int row = 0;
       for (JsonArray rowData : layout) {
@@ -435,31 +463,29 @@ void applyMazeConfig(JsonDocument& doc) {
               col++;
             }
           }
-          Serial.printf("  Row %d loaded: %d cells\n", row, col);
           row++;
         }
       }
-      Serial.printf("  ✅ Maze layout loaded: %d rows total\n", row);
+      Serial.printf("✅ Maze layout loaded successfully: %d x %d\n", row, MAZE_WIDTH);
     } else {
-      Serial.println("  ⚠️  Maze layout array is empty, using default");
+      Serial.println("⚠️  Maze layout array is empty, keeping default maze");
     }
   } else {
-    Serial.println("  ⚠️  No maze_layout in config, using default");
+    Serial.println("⚠️  No maze_layout in config, keeping default maze");
   }
   
   // Reset player to new start position
   playerX = startX;
   playerY = startY;
+  gameWon = false;
+  gamePaused = false;
   
-  Serial.println("\n=== Maze Configuration Applied ===");
-  Serial.printf("Maze ID: %s\n", currentMazeId.c_str());
-  Serial.printf("Name: %s\n", mazeName.c_str());
-  Serial.printf("Start: (%d, %d)\n", startX, startY);
-  Serial.printf("End: (%d, %d)\n", endX, endY);
-  Serial.printf("Checkpoint 1: (%d, %d)\n", checkpoint1X, checkpoint1Y);
-  Serial.printf("Checkpoint 2: (%d, %d)\n", checkpoint2X, checkpoint2Y);
-  Serial.printf("Player reset to: (%d, %d)\n", playerX, playerY);
-  Serial.println("==================================\n");
+  configReceived = true;
+  
+  Serial.println("==================================================");
+  Serial.println("✅ MAZE CONFIGURATION APPLIED SUCCESSFULLY");
+  Serial.printf("   Player position reset to: (%d, %d)\n", playerX, playerY);
+  Serial.println("==================================================\n");
   
   // Send confirmation
   sendMazeConfigConfirmation();
@@ -468,62 +494,96 @@ void applyMazeConfig(JsonDocument& doc) {
 void sendMazeConfigConfirmation() {
   StaticJsonDocument<256> doc;
   doc["type"] = "MAZE_CONFIG_UPDATED";
-  doc["message"] = "Maze configuration received and applied";
+  doc["message"] = "Maze configuration received and applied successfully";
   doc["device"] = "ESP32_Maze";
   doc["maze_id"] = currentMazeId;
   doc["maze_name"] = mazeName;
+  doc["config_received"] = true;
   doc["timestamp"] = millis();
   
   String jsonString;
   serializeJson(doc, jsonString);
   client.publish(publish_topic, jsonString.c_str());
+  Serial.println("✓ Sent configuration confirmation to Raspberry Pi\n");
 }
 
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  Serial.printf("\n📨 MQTT Message [%s]: %d bytes\n", topic, length);
+  
   String message = "";
   for (int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
   
-  Serial.println("Received MQTT message: " + message);
+  // Don't print full message if it's too long (maze config)
+  if (length > 200) {
+    Serial.printf("Message: (large payload - %d bytes)\n", length);
+  } else {
+    Serial.printf("Message: %s\n", message.c_str());
+  }
   
-  DynamicJsonDocument doc(2048);  // Larger buffer for maze layout
+  // Use larger buffer for maze configuration
+  DynamicJsonDocument doc(4096);  // Increased to 4KB for maze layout
   DeserializationError error = deserializeJson(doc, message);
   
-  if (!error) {
-    String command = doc["command"];
-    String type = doc["type"];
+  if (error) {
+    Serial.print("❌ JSON Parse Error: ");
+    Serial.println(error.c_str());
+    Serial.printf("Message length: %d bytes\n", length);
+    return;
+  }
+  
+  String command = doc["command"] | "";
+  String type = doc["type"] | "";
+  
+  Serial.printf("Parsed - Type: '%s', Command: '%s'\n", type.c_str(), command.c_str());
+  
+  if (command == "UPDATE_MAZE_CONFIG" || type == "UPDATE_MAZE_CONFIG") {
+    Serial.println("✅ Received maze configuration update!");
+    applyMazeConfig(doc);
+  }
+  else if (command == "START_GAME" || type == "START_GAME") {
+    gameActive = true;
+    gameWon = false;
+    gamePaused = false;
+    playerX = startX;
+    playerY = startY;
+    Serial.println("🎮 Game started via MQTT");
     
-    if (command == "UPDATE_MAZE_CONFIG" || type == "UPDATE_MAZE_CONFIG") {
-      Serial.println("Received maze configuration update!");
-      applyMazeConfig(doc);
-    }
-    else if (command == "START_GAME" || type == "START_GAME") {
-      gameActive = true;
-      gameWon = false;
+  } else if (command == "STOP_GAME" || type == "STOP_GAME") {
+    gameActive = false;
+    Serial.println("⏹️  Game stopped via MQTT");
+    
+  } else if (command == "RESET_GAME" || type == "RESET_GAME") {
+    gameWon = false;
+    gamePaused = false;
+    playerX = startX;
+    playerY = startY;
+    Serial.println("🔄 Game reset via MQTT");
+    
+  } else if (command == "PAUSE_TIMER" || type == "PAUSE_TIMER") {
+    gamePaused = true;
+    Serial.println("⏸️  Maze game paused");
+    
+    StaticJsonDocument<200> doc;
+    doc["type"] = "MAZE_PAUSED";
+    doc["message"] = "Maze game paused";
+    doc["device"] = "ESP32_Maze";
+    doc["maze_id"] = currentMazeId;
+    doc["timestamp"] = millis();
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    client.publish(publish_topic, jsonString.c_str());
+  }
+  else if (command == "RESUME_TIMER" || type == "RESUME_TIMER") {
+    if (!gameWon) {
       gamePaused = false;
-      playerX = startX;
-      playerY = startY;
-      Serial.println("Game started via MQTT");
-      
-    } else if (command == "STOP_GAME" || type == "STOP_GAME") {
-      gameActive = false;
-      Serial.println("Game stopped via MQTT");
-      
-    } else if (command == "RESET_GAME" || type == "RESET_GAME") {
-      gameWon = false;
-      gamePaused = false;
-      playerX = startX;
-      playerY = startY;
-      Serial.println("Game reset via MQTT");
-      
-    } else if (command == "PAUSE_TIMER" || type == "PAUSE_TIMER") {
-      gamePaused = true;
-      Serial.println("⏸️ Maze game paused");
+      Serial.println("▶️  Maze game resumed");
       
       StaticJsonDocument<200> doc;
-      doc["type"] = "MAZE_PAUSED";
-      doc["message"] = "Maze game paused";
+      doc["type"] = "MAZE_RESUMED";
+      doc["message"] = "Maze game resumed";
       doc["device"] = "ESP32_Maze";
       doc["maze_id"] = currentMazeId;
       doc["timestamp"] = millis();
@@ -532,42 +592,20 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
       serializeJson(doc, jsonString);
       client.publish(publish_topic, jsonString.c_str());
     }
-    else if (command == "RESUME_TIMER" || type == "RESUME_TIMER") {
-      if (!gameWon) {
-        gamePaused = false;
-        Serial.println("▶️ Maze game resumed");
-        
-        StaticJsonDocument<200> doc;
-        doc["type"] = "MAZE_RESUMED";
-        doc["message"] = "Maze game resumed";
-        doc["device"] = "ESP32_Maze";
-        doc["maze_id"] = currentMazeId;
-        doc["timestamp"] = millis();
-        
-        String jsonString;
-        serializeJson(doc, jsonString);
-        client.publish(publish_topic, jsonString.c_str());
-      }
-    }
-    else if (command == "X" || type == "X") {
-      gameActive = false;
-      Serial.println("Game deactivated via X command");
-    } 
-    else if (command == "ACTIVATE" || type == "ACTIVATE") {
-      waiting = 1;
-      Serial.println("🚀 Maze module activated! All modules connected.");
-      sendConnectionStatus();
+  }
+  else if (command == "X" || type == "X") {
+    gameActive = false;
+    Serial.println("❌ Game deactivated via X command");
+  } 
+  else if (command == "ACTIVATE" || type == "ACTIVATE") {
+    waiting = 1;
+    Serial.println("🚀 Maze module activated! All modules connected.");
+    sendConnectionStatus();
+    
+    // Request config again after activation to ensure we have it
+    if (!configReceived) {
+      delay(500);
+      requestMazeConfig();
     }
   }
-}
-
-void sendMqttMessage(String type, String message) {
-  StaticJsonDocument<200> doc;
-  doc["type"] = type;
-  doc["message"] = message;
-  doc["time"] = millis();
-  
-  String jsonString;
-  serializeJson(doc, jsonString);
-  client.publish(publish_topic, jsonString.c_str());
 }
