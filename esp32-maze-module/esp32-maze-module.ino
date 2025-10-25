@@ -400,6 +400,8 @@ void requestMazeConfig() {
 }
 
 void applyMazeConfig(JsonDocument& doc) {
+  Serial.println("\n🔧 APPLYING MAZE CONFIGURATION...");
+  
   currentMazeId = doc["maze_id"].as<String>();
   mazeName = doc["name"].as<String>();
   startX = doc["start_x"] | 1;
@@ -411,22 +413,38 @@ void applyMazeConfig(JsonDocument& doc) {
   checkpoint2X = doc["checkpoint_2_x"] | 9;
   checkpoint2Y = doc["checkpoint_2_y"] | 3;
   
+  Serial.printf("  Maze ID: %s\n", currentMazeId.c_str());
+  Serial.printf("  Name: %s\n", mazeName.c_str());
+  Serial.printf("  Start: (%d, %d)\n", startX, startY);
+  Serial.printf("  End: (%d, %d)\n", endX, endY);
+  
   // Load maze layout if provided
   if (doc.containsKey("maze_layout")) {
     JsonArray layout = doc["maze_layout"];
-    int row = 0;
-    for (JsonArray rowData : layout) {
-      if (row < MAZE_HEIGHT) {
-        int col = 0;
-        for (int cell : rowData) {
-          if (col < MAZE_WIDTH) {
-            maze[row][col] = cell;
-            col++;
+    
+    if (layout.size() > 0) {
+      Serial.printf("  Loading maze layout: %d rows\n", layout.size());
+      
+      int row = 0;
+      for (JsonArray rowData : layout) {
+        if (row < MAZE_HEIGHT) {
+          int col = 0;
+          for (int cell : rowData) {
+            if (col < MAZE_WIDTH) {
+              maze[row][col] = cell;
+              col++;
+            }
           }
+          Serial.printf("  Row %d loaded: %d cells\n", row, col);
+          row++;
         }
-        row++;
       }
+      Serial.printf("  ✅ Maze layout loaded: %d rows total\n", row);
+    } else {
+      Serial.println("  ⚠️  Maze layout array is empty, using default");
     }
+  } else {
+    Serial.println("  ⚠️  No maze_layout in config, using default");
   }
   
   // Reset player to new start position
@@ -440,6 +458,7 @@ void applyMazeConfig(JsonDocument& doc) {
   Serial.printf("End: (%d, %d)\n", endX, endY);
   Serial.printf("Checkpoint 1: (%d, %d)\n", checkpoint1X, checkpoint1Y);
   Serial.printf("Checkpoint 2: (%d, %d)\n", checkpoint2X, checkpoint2Y);
+  Serial.printf("Player reset to: (%d, %d)\n", playerX, playerY);
   Serial.println("==================================\n");
   
   // Send confirmation
