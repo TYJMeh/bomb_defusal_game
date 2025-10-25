@@ -32,23 +32,23 @@ const char* publish_topic = "esp3/to/rpi";
 #define MAZE_HEIGHT 8
 #define CELL_SIZE 8
 
-// Mid circle position
-int midX = 4;
-int midY = 3;
-
-// Mid circle 2 position
-int midX2 = 9;
-int midY2 = 3;
+// Configurable maze settings (loaded from JSON)
+String currentMazeId = "maze_1";
+String mazeName = "Default Maze";
+int startX = 1;
+int startY = 1;
+int endX = 14;
+int endY = 6;
+int checkpoint1X = 4;
+int checkpoint1Y = 3;
+int checkpoint2X = 9;
+int checkpoint2Y = 3;
 
 // Player position
 int playerX = 1;
 int playerY = 1;
 
-// End point position
-int endX = 14;
-int endY = 6;
-
-// Maze layout (1 = wall, 0 = path)
+// Default maze layout (will be overwritten by config)
 int maze[MAZE_HEIGHT][MAZE_WIDTH] = {
   {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
   {1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
@@ -63,6 +63,7 @@ int maze[MAZE_HEIGHT][MAZE_WIDTH] = {
 // Game state
 bool gameWon = false;
 bool gameActive = true;
+bool gamePaused = false;
 unsigned long lastMoveTime = 0;
 const unsigned long moveDelay = 200;
 int waiting = 0;
@@ -86,16 +87,19 @@ void setup() {
   display.display();
   
   Serial.println("Maze Game Started!");
+  Serial.println("Waiting for configuration from Raspberry Pi...");
 }
 
 void sendHeartbeat() {
   if (client.connected() && waiting == 1) {
-    StaticJsonDocument<128> doc;
+    StaticJsonDocument<256> doc;
     doc["type"] = "HEARTBEAT";
     doc["device"] = "ESP32_Maze";
     doc["timestamp"] = millis();
     doc["game_active"] = gameActive;
     doc["game_won"] = gameWon;
+    doc["game_paused"] = gamePaused;
+    doc["maze_id"] = currentMazeId;
     
     String json_string;
     serializeJson(doc, json_string);
@@ -124,30 +128,27 @@ void loop() {
   }
   client.loop();
   
-  if (waiting == 0) {
-    displayWaitingMessage();
-  }
-  else if (waiting == 1) {
-    if (!gameWon && gameActive) {
-      handleInput();
-      drawGame();
-    } else if (gameWon) {
-      displayWinMessage();
-    } else {
-      displayWaitingMessage();
-    }
-  }
-
+  // Send heartbeat
   if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
     sendHeartbeat();
     lastHeartbeat = millis();
   }
-
-  int xValue = analogRead(JOY_X_PIN);
-  int yValue = analogRead(JOY_Y_PIN);
-
-  Serial.println(xValue);
-  Serial.println(yValue);
+  
+  if (waiting == 0) {
+    displayWaitingMessage();
+  }
+  else if (waiting == 1) {
+    if (!gameWon && gameActive && !gamePaused) {
+      handleInput();
+      drawGame();
+    } else if (gameWon) {
+      displayWinMessage();
+    } else if (gamePaused) {
+      displayPausedMessage();
+    } else {
+      displayWaitingMessage();
+    }
+  }
 
   delay(50);
 }
@@ -184,14 +185,15 @@ void handleInput() {
     if (newX >= 0 && newX < MAZE_WIDTH && newY >= 0 && newY < MAZE_HEIGHT) {
       if (maze[newY][newX] == 1) {
         // Hit a wall - reset to start position
-        playerX = 1;
-        playerY = 1;
+        playerX = startX;
+        playerY = startY;
         Serial.println("Hit wall! Returning to start.");
         
         StaticJsonDocument<200> doc;
         doc["type"] = "WALL_HIT";
         doc["message"] = "Player hit wall and returned to start";
         doc["device"] = "ESP32_Maze";
+        doc["maze_id"] = currentMazeId;
         doc["timestamp"] = millis();
         
         String jsonString;
@@ -211,6 +213,8 @@ void handleInput() {
           StaticJsonDocument<200> doc;
           doc["type"] = "MAZE_COMPLETED";
           doc["message"] = "Player completed the maze!";
+          doc["maze_id"] = currentMazeId;
+          doc["maze_name"] = mazeName;
           doc["time"] = millis();
           doc["device"] = "ESP32_Maze";
           doc["timestamp"] = millis();
@@ -229,13 +233,14 @@ void handleInput() {
   if (digitalRead(JOY_BUTTON_PIN) == LOW) {
     if (gameWon) {
       gameWon = false;
-      playerX = 1;
-      playerY = 1;
+      playerX = startX;
+      playerY = startY;
       
       StaticJsonDocument<200> doc;
       doc["type"] = "GAME_RESTART";
       doc["message"] = "Maze game restarted";
       doc["device"] = "ESP32_Maze";
+      doc["maze_id"] = currentMazeId;
       doc["timestamp"] = millis();
       
       String jsonString;
@@ -249,29 +254,27 @@ void handleInput() {
 void drawGame() {
   display.clearDisplay();
 
-  // Draw subtle dotted grid lines for visual reference (doesn't affect gameplay)
-  // Draw vertical dotted lines
+  // Draw subtle dotted grid lines
   for (int x = 1; x < MAZE_WIDTH; x++) {
     for (int y = 0; y < MAZE_HEIGHT * CELL_SIZE; y += 2) {
       display.drawPixel(x * CELL_SIZE, y, SSD1306_WHITE);
     }
   }
-  // Draw horizontal dotted lines
   for (int y = 1; y < MAZE_HEIGHT; y++) {
     for (int x = 0; x < MAZE_WIDTH * CELL_SIZE; x += 2) {
       display.drawPixel(x, y * CELL_SIZE, SSD1306_WHITE);
     }
   }
 
-  // Draw mid point (circle)
-  int middleX = midX * CELL_SIZE + CELL_SIZE/2;
-  int middleY = midY * CELL_SIZE + CELL_SIZE/2;
-  display.drawCircle(middleX, middleY, 3, SSD1306_WHITE);
+  // Draw checkpoint 1
+  int cp1X = checkpoint1X * CELL_SIZE + CELL_SIZE/2;
+  int cp1Y = checkpoint1Y * CELL_SIZE + CELL_SIZE/2;
+  display.drawCircle(cp1X, cp1Y, 3, SSD1306_WHITE);
 
-  // Draw mid point 2 (circle)
-  int middleX2 = midX2 * CELL_SIZE + CELL_SIZE/2;
-  int middleY2 = midY2 * CELL_SIZE + CELL_SIZE/2;
-  display.drawCircle(middleX2, middleY2, 3, SSD1306_WHITE);
+  // Draw checkpoint 2
+  int cp2X = checkpoint2X * CELL_SIZE + CELL_SIZE/2;
+  int cp2Y = checkpoint2Y * CELL_SIZE + CELL_SIZE/2;
+  display.drawCircle(cp2X, cp2Y, 3, SSD1306_WHITE);
   
   // Draw player (filled dot)
   int playerPixelX = playerX * CELL_SIZE + CELL_SIZE/2;
@@ -286,11 +289,13 @@ void displayWinMessage() {
   
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 20);
+  display.setCursor(20, 15);
   display.println("You Win!");
   
   display.setTextSize(1);
-  display.setCursor(10, 45);
+  display.setCursor(10, 40);
+  display.println(mazeName.c_str());
+  display.setCursor(5, 52);
   display.println("Press button to restart");
   
   display.display();
@@ -305,6 +310,26 @@ void displayWaitingMessage() {
   display.println("Game Inactive");
   display.setCursor(10, 35);
   display.println("Waiting for RPi...");
+  
+  display.display();
+}
+
+void displayPausedMessage() {
+  display.clearDisplay();
+  
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 15);
+  display.println("PAUSED");
+  
+  display.setTextSize(1);
+  display.setCursor(10, 40);
+  display.println("Module disconnected");
+  
+  // Blinking border
+  if ((millis() / 500) % 2) {
+    display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+  }
   
   display.display();
 }
@@ -337,6 +362,7 @@ void reconnectMQTT() {
       client.subscribe(subscribe_topic);
       
       sendConnectionStatus();
+      requestMazeConfig();
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -347,16 +373,91 @@ void reconnectMQTT() {
 }
 
 void sendConnectionStatus() {
-  StaticJsonDocument<200> doc;
+  StaticJsonDocument<256> doc;
   doc["type"] = "MAZE_MODULE_CONNECTED";
   doc["message"] = "Maze navigation module ready";
   doc["device"] = "ESP32_Maze";
+  doc["maze_id"] = currentMazeId;
   doc["timestamp"] = millis();
   
   String jsonString;
   serializeJson(doc, jsonString);
   client.publish(publish_topic, jsonString.c_str());
   Serial.println("Sent connection status to Raspberry Pi");
+}
+
+void requestMazeConfig() {
+  StaticJsonDocument<128> doc;
+  doc["type"] = "REQUEST_MAZE_CONFIG";
+  doc["message"] = "Requesting maze configuration";
+  doc["device"] = "ESP32_Maze";
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  client.publish(publish_topic, jsonString.c_str());
+  Serial.println("Requested maze configuration from Raspberry Pi");
+}
+
+void applyMazeConfig(JsonDocument& doc) {
+  currentMazeId = doc["maze_id"].as<String>();
+  mazeName = doc["name"].as<String>();
+  startX = doc["start_x"] | 1;
+  startY = doc["start_y"] | 1;
+  endX = doc["end_x"] | 14;
+  endY = doc["end_y"] | 6;
+  checkpoint1X = doc["checkpoint_1_x"] | 4;
+  checkpoint1Y = doc["checkpoint_1_y"] | 3;
+  checkpoint2X = doc["checkpoint_2_x"] | 9;
+  checkpoint2Y = doc["checkpoint_2_y"] | 3;
+  
+  // Load maze layout if provided
+  if (doc.containsKey("maze_layout")) {
+    JsonArray layout = doc["maze_layout"];
+    int row = 0;
+    for (JsonArray rowData : layout) {
+      if (row < MAZE_HEIGHT) {
+        int col = 0;
+        for (int cell : rowData) {
+          if (col < MAZE_WIDTH) {
+            maze[row][col] = cell;
+            col++;
+          }
+        }
+        row++;
+      }
+    }
+  }
+  
+  // Reset player to new start position
+  playerX = startX;
+  playerY = startY;
+  
+  Serial.println("\n=== Maze Configuration Applied ===");
+  Serial.printf("Maze ID: %s\n", currentMazeId.c_str());
+  Serial.printf("Name: %s\n", mazeName.c_str());
+  Serial.printf("Start: (%d, %d)\n", startX, startY);
+  Serial.printf("End: (%d, %d)\n", endX, endY);
+  Serial.printf("Checkpoint 1: (%d, %d)\n", checkpoint1X, checkpoint1Y);
+  Serial.printf("Checkpoint 2: (%d, %d)\n", checkpoint2X, checkpoint2Y);
+  Serial.println("==================================\n");
+  
+  // Send confirmation
+  sendMazeConfigConfirmation();
+}
+
+void sendMazeConfigConfirmation() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "MAZE_CONFIG_UPDATED";
+  doc["message"] = "Maze configuration received and applied";
+  doc["device"] = "ESP32_Maze";
+  doc["maze_id"] = currentMazeId;
+  doc["maze_name"] = mazeName;
+  doc["timestamp"] = millis();
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  client.publish(publish_topic, jsonString.c_str());
 }
 
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
@@ -367,52 +468,61 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   
   Serial.println("Received MQTT message: " + message);
   
-  StaticJsonDocument<200> doc;
+  DynamicJsonDocument doc(2048);  // Larger buffer for maze layout
   DeserializationError error = deserializeJson(doc, message);
   
   if (!error) {
     String command = doc["command"];
+    String type = doc["type"];
     
-    if (command == "START_GAME") {
+    if (command == "UPDATE_MAZE_CONFIG" || type == "UPDATE_MAZE_CONFIG") {
+      Serial.println("Received maze configuration update!");
+      applyMazeConfig(doc);
+    }
+    else if (command == "START_GAME" || type == "START_GAME") {
       gameActive = true;
       gameWon = false;
-      playerX = 1;
-      playerY = 1;
+      gamePaused = false;
+      playerX = startX;
+      playerY = startY;
       Serial.println("Game started via MQTT");
       
-    } else if (command == "STOP_GAME") {
+    } else if (command == "STOP_GAME" || type == "STOP_GAME") {
       gameActive = false;
       Serial.println("Game stopped via MQTT");
       
-    } else if (command == "RESET_GAME") {
+    } else if (command == "RESET_GAME" || type == "RESET_GAME") {
       gameWon = false;
-      playerX = 1;
-      playerY = 1;
+      gamePaused = false;
+      playerX = startX;
+      playerY = startY;
       Serial.println("Game reset via MQTT");
       
-    } else if (command == "PAUSE_TIMER") {
-      gameActive = false;
+    } else if (command == "PAUSE_TIMER" || type == "PAUSE_TIMER") {
+      gamePaused = true;
       Serial.println("⏸️ Maze game paused");
       
       StaticJsonDocument<200> doc;
       doc["type"] = "MAZE_PAUSED";
       doc["message"] = "Maze game paused";
       doc["device"] = "ESP32_Maze";
+      doc["maze_id"] = currentMazeId;
       doc["timestamp"] = millis();
       
       String jsonString;
       serializeJson(doc, jsonString);
       client.publish(publish_topic, jsonString.c_str());
     }
-    else if (command == "RESUME_TIMER") {
+    else if (command == "RESUME_TIMER" || type == "RESUME_TIMER") {
       if (!gameWon) {
-        gameActive = true;
+        gamePaused = false;
         Serial.println("▶️ Maze game resumed");
         
         StaticJsonDocument<200> doc;
         doc["type"] = "MAZE_RESUMED";
         doc["message"] = "Maze game resumed";
         doc["device"] = "ESP32_Maze";
+        doc["maze_id"] = currentMazeId;
         doc["timestamp"] = millis();
         
         String jsonString;
@@ -420,11 +530,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         client.publish(publish_topic, jsonString.c_str());
       }
     }
-    else if (command == "X") {
+    else if (command == "X" || type == "X") {
       gameActive = false;
       Serial.println("Game deactivated via X command");
     } 
-    else if (command == "ACTIVATE") {
+    else if (command == "ACTIVATE" || type == "ACTIVATE") {
       waiting = 1;
       Serial.println("🚀 Maze module activated! All modules connected.");
       sendConnectionStatus();
