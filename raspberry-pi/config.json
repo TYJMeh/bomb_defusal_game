@@ -1,6 +1,6 @@
 {
     "timer_settings": {
-        "game_duration": 69,
+        "game_duration": 400,
         "warning_time": 60,
         "countdown_start": 10,
         "auto_reset": true,
@@ -30,8 +30,8 @@
     },
     "maze_ID": {
         "maze_1": {
-            "enabled": true,
-            "name": "maze_1",
+            "enabled": false,
+            "name": "Original_maze",
             "start_x": 1,
             "start_y": 1,
             "end_x": 14,
@@ -52,8 +52,8 @@
             ]
         },
         "maze_2": {
-            "enabled": false,
-            "name": "maze_2",
+            "enabled": true,
+            "name": "Snek_maze",
             "start_x": 1,
             "start_y": 1,
             "end_x": 14,
@@ -75,7 +75,7 @@
         },
         "maze_3": {
             "enabled": false,
-            "name": "maze_3",
+            "name": "Complex_maze",
             "start_x": 1,
             "start_y": 1,
             "end_x": 14,
